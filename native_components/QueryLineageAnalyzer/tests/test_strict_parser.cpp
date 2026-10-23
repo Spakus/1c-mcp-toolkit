@@ -345,7 +345,348 @@ TEST(StrictParser, ValidatorBoundsDepth) {
         cur = next;
     }
 }
-TEST(StrictParser, BatchGrammarNotYetAvailableFailsClosed) {
-    CHECK(!ParseBatchStrict("ВЫБРАТЬ 1").ok);
-    CHECK(!ParseBatchStrict("").ok);
+// ---- statements, clauses, batches ----
+
+namespace {
+
+std::string BatchDump(const std::string& text) {
+    auto r = ParseBatchStrict(text);
+    return r.ok ? DumpBatch(r.batch) : "ERR:" + r.error.code;
+}
+
+bool Bad(const std::string& text) { return BatchDump(text).rfind("ERR:", 0) == 0; }
+
+}  // namespace
+
+TEST(StrictParser, SelectAllClauses) {
+    const char* q =
+        "ВЫБРАТЬ РАЗРЕШЕННЫЕ РАЗЛИЧНЫЕ ПЕРВЫЕ 10 Т.Контрагент КАК К, СУММА(Т.Сумма) КАК С "
+        "ИЗ Документ.Реализация КАК Т "
+        "ЛЕВОЕ СОЕДИНЕНИЕ Справочник.Контрагенты КАК Контрагенты ПО Т.Контрагент = Контрагенты.Ссылка "
+        "ГДЕ Т.Проведен СГРУППИРОВАТЬ ПО Т.Контрагент ИМЕЮЩИЕ СУММА(Т.Сумма) > 0 "
+        "УПОРЯДОЧИТЬ ПО С УБЫВ ИТОГИ СУММА(С) ПО ОБЩИЕ, К ИЕРАРХИЯ";
+    const std::string d = BatchDump(q);
+    CHECK(d.rfind("ERR:", 0) != 0);
+    CHECK(d.find("allowed") != std::string::npos);
+    CHECK(d.find("distinct") != std::string::npos);
+    CHECK(d.find("top 10") != std::string::npos);
+    CHECK(d.find("(join left") != std::string::npos);
+    CHECK(d.find("(totals") != std::string::npos);
+}
+TEST(StrictParser, VirtualTableWithParams) {
+    CHECK(BatchDump("ВЫБРАТЬ О.СуммаОстаток ИЗ РегистрНакопления.Взаиморасчеты.Остатки(&Дата, Контрагент = &К) КАК О")
+              .find("(vt РегистрНакопления.Взаиморасчеты.Остатки") != std::string::npos);
+    CHECK(BatchDump("ВЫБРАТЬ О.Х ИЗ РегистрСведений.Цены.СрезПоследних(, ) КАК О").rfind("ERR:", 0) != 0);
+    auto r = ParseBatchStrict("ВЫБРАТЬ О.Х ИЗ РегистрСведений.Цены.СрезПоследних(, ) КАК О");
+    CHECK(r.ok);
+    CHECK_EQ(r.batch.statements[0].select->from[0].vt_params.size(), 2u);
+    CHECK(r.batch.statements[0].select->from[0].vt_params[0] == nullptr);
+}
+TEST(StrictParser, TempTablesBatchesDrop) {
+    CHECK_EQ(ParseBatchStrict("ВЫБРАТЬ 1 КАК Х ПОМЕСТИТЬ ВТ; ВЫБРАТЬ ВТ.Х ИЗ ВТ КАК ВТ; УНИЧТОЖИТЬ ВТ").batch.statements.size(), 3u);
+    CHECK_EQ(ParseBatchStrict("ВЫБРАТЬ 1;").batch.statements.size(), 1u);
+}
+TEST(StrictParser, UnionOrderTotalsAttachToWholeStatement) {
+    auto r = ParseBatchStrict("ВЫБРАТЬ А.Х ИЗ Справочник.А КАК А ОБЪЕДИНИТЬ ВСЕ ВЫБРАТЬ Б.Х ИЗ Справочник.Б КАК Б УПОРЯДОЧИТЬ ПО Х");
+    CHECK(r.ok);
+    CHECK_EQ(r.batch.statements[0].select->unions.size(), 1u);
+    CHECK_EQ(r.batch.statements[0].select->order_by.size(), 1u);
+    CHECK(r.batch.statements[0].select->unions[0].all);
+}
+TEST(StrictParser, SubqueryInFromAndIn) {
+    CHECK(ParseBatchStrict("ВЫБРАТЬ П.Х ИЗ (ВЫБРАТЬ Т.Х ИЗ Справочник.Т КАК Т) КАК П ГДЕ П.Х В (ВЫБРАТЬ Р.Х ИЗ Справочник.Р КАК Р)").ok);
+}
+TEST(StrictParser, StatementFailClosed) {
+    for (const char* bad : {
+             "ВЫБРАТЬ Х ИЗ",
+             "ВЫБРАТЬ Х ИЗ Справочник.А КАК",
+             "ВЫБРАТЬ Х ИЗ Справочник.А ГДЕ",
+             "ВЫБРАТЬ Х ИЗ Справочник.А ЛЕВОЕ СОЕДИНЕНИЕ Справочник.Б КАК Б",
+             "ВЫБРАТЬ Х ИЗ Справочник.А КАК А ГДЕ А.Х = 1 ЛИШНЕЕ",
+             "ВЫБРАТЬ Х ИЗ Справочник.А {ГДЕ А.Х}",
+             "ВЫБРАТЬ ПЕРВЫЕ &Н Х ИЗ Справочник.А",
+             "ВЫБРАТЬ Х ИЗ Справочник.А ДЛЯ ИЗМЕНЕНИЯ Справочник.Б ЛИШНЕЕ"})
+        CHECK(BatchDump(bad).rfind("ERR:", 0) == 0);
+}
+TEST(StrictParser, StatementLimit) {
+    std::string many;
+    for (int i = 0; i < 65; ++i) many += "ВЫБРАТЬ 1;";
+    CHECK_EQ(BatchDump(many), std::string("ERR:Q_PARSE_LIMIT"));
+    std::string ok;
+    for (int i = 0; i < 64; ++i) ok += "ВЫБРАТЬ 1;";
+    CHECK(!Bad(ok));
+}
+TEST(StrictParser, UnlistedConstructsAreExplicitNodesOrErrors) {
+    auto r = ParseBatchStrict("ВЫБРАТЬ А.Х ПОМЕСТИТЬ ВТ ИЗ Справочник.А КАК А ДЛЯ ИЗМЕНЕНИЯ Справочник.А ИНДЕКСИРОВАТЬ ПО А.Х");
+    CHECK(r.ok);
+    CHECK(r.batch.statements[0].select->for_update);
+    CHECK_EQ(r.batch.statements[0].select->for_update_tables.size(), 1u);
+    CHECK_EQ(r.batch.statements[0].select->index_by.size(), 1u);
+    auto p = ParseBatchStrict("ВЫБРАТЬ А.Х ИЗ Справочник.А КАК А ИТОГИ ПО А.Х ПЕРИОДАМИ(ДЕНЬ, &Н, &К)");
+    CHECK(p.ok);
+    CHECK(p.batch.statements[0].select->totals_by[0].periods);
+    CHECK_EQ(p.batch.statements[0].select->totals_by[0].periods_args.size(), 3u);
+}
+TEST(StrictParser, JoinForms) {
+    for (const char* j : {"ПОЛНОЕ СОЕДИНЕНИЕ", "ПОЛНОЕ ВНЕШНЕЕ СОЕДИНЕНИЕ", "ЛЕВОЕ ВНЕШНЕЕ СОЕДИНЕНИЕ",
+                          "ПРАВОЕ СОЕДИНЕНИЕ", "ВНУТРЕННЕЕ СОЕДИНЕНИЕ", "СОЕДИНЕНИЕ"}) {
+        CHECK(!Bad(std::string("ВЫБРАТЬ А.Х ИЗ Справочник.А КАК А ") + j + " Справочник.Б КАК Б ПО А.Х = Б.Х"));
+    }
+    for (const char* j : {"ВНЕШНЕЕ СОЕДИНЕНИЕ", "ВНУТРЕННЕЕ ВНЕШНЕЕ СОЕДИНЕНИЕ", "ЛЕВОЕ ЛЕВОЕ СОЕДИНЕНИЕ"}) {
+        CHECK(Bad(std::string("ВЫБРАТЬ А.Х ИЗ Справочник.А КАК А ") + j + " Справочник.Б КАК Б ПО А.Х = Б.Х"));
+    }
+    CHECK(!Bad("ВЫБРАТЬ А.Х ИЗ Справочник.А КАК А, Справочник.Б КАК Б ГДЕ А.Х = Б.Х"));
+}
+TEST(StrictParser, WildcardsAndAliases) {
+    auto r = ParseBatchStrict("ВЫБРАТЬ *, А.*, А.Б.* , А.Х Алиас ИЗ Справочник.А КАК А");
+    CHECK(r.ok);
+    const auto& items = r.batch.statements[0].select->items;
+    CHECK_EQ(items.size(), 4u);
+    CHECK(items[0].wildcard && items[0].wildcard_prefix.empty());
+    CHECK_EQ(items[2].wildcard_prefix.size(), 2u);
+    CHECK(!items[3].alias_explicit && items[3].alias == "Алиас");
+}
+TEST(StrictParser, StatementStructureRejections) {
+    CHECK(Bad(""));
+    CHECK(Bad(";"));
+    CHECK(Bad("ВЫБРАТЬ 1;;ВЫБРАТЬ 2"));
+    CHECK(Bad("УНИЧТОЖИТЬ Справочник.А"));
+    CHECK(Bad("УНИЧТОЖИТЬ"));
+    CHECK(Bad("ВЫБРАТЬ 1 ПОМЕСТИТЬ А.Б"));
+    CHECK(Bad("ВЫБРАТЬ 1 ОБЪЕДИНИТЬ ВЫБРАТЬ 2 ПОМЕСТИТЬ ВТ"));
+    CHECK(Bad("ВЫБРАТЬ 1 ИЗ Справочник.А КАК А ГДЕ А.Х В (ВЫБРАТЬ 1 ПОМЕСТИТЬ ВТ)"));
+    CHECK(Bad("ВЫБРАТЬ 1 УПОРЯДОЧИТЬ ПО А ИЗ Справочник.А"));
+    CHECK(Bad("ВЫБРАТЬ 1 ПЕРВЫЕ 5"));
+    CHECK(Bad("ВЫБРАТЬ 1 ИЗ Справочник.А КАК А ИТОГИ ПО А.Х ТОЛЬКО"));
+    CHECK(Bad("ВЫБРАТЬ 1 ИЗ (ВЫБРАТЬ 2)"));
+    CHECK(Bad("ВЫБРАТЬ 1 ИЗ Справочник.А(1,"));
+    CHECK(Bad("ВЫБРАТЬ А.Х ИЗ Справочник.А КАК А ГДЕ А.Х В (ВЫБРАТЬ 1) ГДЕ 1"));
+    CHECK(Bad("ВЫБРАТЬ 1 ИЗ Справочник.А КАК Б.В"));
+    CHECK(Bad("ВЫБРАТЬ 1 ИЗ Справочник.А КАК Latinаа"));
+}
+TEST(StrictParser, NestedSubqueryDepthIsLimited) {
+    std::string q = "ВЫБРАТЬ 1 КАК Х";
+    for (int i = 0; i < 100; ++i) q = "ВЫБРАТЬ Х ИЗ (" + q + ") КАК П";
+    CHECK_EQ(BatchDump(q), std::string("ERR:Q_PARSE_LIMIT"));
+}
+TEST(StrictParser, ValidateBatchRejectsMalformedTrees) {
+    ParseError err;
+    Batch b;
+    CHECK(!ValidateBatch(b, err));
+    Statement st;
+    st.kind = Statement::K::Select;
+    b.statements.push_back(st);
+    CHECK(!ValidateBatch(b, err));
+    b.statements[0].select = std::make_shared<Select>();
+    CHECK(!ValidateBatch(b, err));
+    SelectItem it;
+    it.expr = std::make_shared<Expr>();
+    b.statements[0].select->items.push_back(it);
+    CHECK(!ValidateBatch(b, err));
+    b.statements[0].select->items[0].expr = Make(Expr::K::NullLit);
+    b.statements[0].select->items[0].expr->text = "NULL";
+    CHECK(ValidateBatch(b, err));
+    b.statements[0].select->top = "x";
+    CHECK(!ValidateBatch(b, err));
+    b.statements[0].select->top.clear();
+    b.statements[0].select->joins.emplace_back();
+    CHECK(!ValidateBatch(b, err));
+    b.statements[0].select->joins.clear();
+    Statement drop;
+    drop.kind = Statement::K::Drop;
+    drop.drop_name = "А.Б";
+    b.statements.push_back(drop);
+    CHECK(!ValidateBatch(b, err));
+}
+TEST(StrictParser, ValidateWalksSubqueryBodies) {
+    auto r = ParseExpressionForTest("Х В (ВЫБРАТЬ 1 КАК А)");
+    CHECK(r.ok);
+    ParseError err;
+    CHECK(ValidateExpr(r.expr, err));
+    r.expr->subquery->items[0].expr->kind = Expr::K::Unset;
+    CHECK(!ValidateExpr(r.expr, err));
+    r.expr->subquery->items.clear();
+    CHECK(!ValidateExpr(r.expr, err));
+    r.expr->subquery->items.push_back(SelectItem{});
+    r.expr->subquery->items[0].wildcard = true;
+    CHECK(ValidateExpr(r.expr, err));
+    r.expr->subquery->into = "А.Б";
+    CHECK(!ValidateExpr(r.expr, err));
+}
+TEST(StrictParser, BatchDumpShape) {
+    CHECK_EQ(BatchDump("ВЫБРАТЬ 1 КАК Х"), std::string("(batch (select (items (item 1 КАК Х))))"));
+    CHECK_EQ(BatchDump("УНИЧТОЖИТЬ ВТ"), std::string("(batch (drop ВТ))"));
+}
+
+// ---- review fixes ----
+
+namespace {
+
+ParseError BatchErr(const std::string& text) { return ParseBatchStrict(text).error; }
+
+std::shared_ptr<Select> OneSelect(ParseResult& r) { return r.batch.statements[0].select; }
+
+}  // namespace
+
+TEST(StrictParser, AmbiguousClauseBeforeUnionIsRejected) {
+    for (const char* q : {
+             "ВЫБРАТЬ А.Х ИЗ Справочник.А КАК А ДЛЯ ИЗМЕНЕНИЯ ОБЪЕДИНИТЬ ВЫБРАТЬ 1",
+             "ВЫБРАТЬ А.Х ПОМЕСТИТЬ ВТ ИЗ Справочник.А КАК А ИНДЕКСИРОВАТЬ ПО А.Х ОБЪЕДИНИТЬ ВЫБРАТЬ 1"}) {
+        const ParseError e = BatchErr(q);
+        CHECK_EQ(e.code, std::string("Q_PARSE_AMBIGUOUS_CLAUSE"));
+        CHECK(e.pos.line >= 1 && e.pos.offset > 0);
+    }
+}
+TEST(StrictParser, IndexNeedsIntoAndIsNotForUnionParts) {
+    CHECK(Bad("ВЫБРАТЬ А.Х ИЗ Справочник.А КАК А ИНДЕКСИРОВАТЬ ПО А.Х"));
+    CHECK(Bad("ВЫБРАТЬ 1 ПОМЕСТИТЬ ВТ ОБЪЕДИНИТЬ ВЫБРАТЬ А.Х ИЗ Справочник.А КАК А ИНДЕКСИРОВАТЬ ПО А.Х"));
+    auto r = ParseBatchStrict("ВЫБРАТЬ А.Х ПОМЕСТИТЬ ВТ ИЗ Справочник.А КАК А ИНДЕКСИРОВАТЬ ПО А.Х");
+    CHECK(r.ok);
+    ParseError err;
+    OneSelect(r)->into.clear();
+    CHECK(!ValidateBatch(r.batch, err));
+    auto u = ParseBatchStrict("ВЫБРАТЬ 1 ПОМЕСТИТЬ ВТ ОБЪЕДИНИТЬ ВЫБРАТЬ А.Х ИЗ Справочник.А КАК А");
+    CHECK(u.ok);
+    auto part = OneSelect(u)->unions[0].select;
+    part->index_by.push_back(Make(Expr::K::NullLit));
+    part->index_by[0]->text = "NULL";
+    CHECK(!ValidateBatch(u.batch, err));
+    part->index_by.clear();
+    part->into = "ВТ2";
+    CHECK(!ValidateBatch(u.batch, err));
+}
+TEST(StrictParser, UnionLimit) {
+    std::string q = "ВЫБРАТЬ 1";
+    for (int i = 0; i < 256; ++i) q += " ОБЪЕДИНИТЬ ВЫБРАТЬ 1";
+    auto r = ParseBatchStrict(q);
+    CHECK(r.ok);
+    CHECK_EQ(OneSelect(r)->unions.size(), 256u);
+    CHECK_EQ(BatchDump(q + " ОБЪЕДИНИТЬ ВЫБРАТЬ 1"), std::string("ERR:Q_PARSE_LIMIT"));
+    OneSelect(r)->unions.push_back(OneSelect(r)->unions[0]);
+    ParseError err;
+    CHECK(!ValidateBatch(r.batch, err));
+    CHECK_EQ(err.code, std::string("Q_PARSE_LIMIT"));
+}
+TEST(StrictParser, ValidatorEnforcesParserLimits) {
+    ParseError err;
+    auto t = ParseBatchStrict("ВЫБРАТЬ ПЕРВЫЕ 5 1");
+    CHECK(t.ok);
+    OneSelect(t)->top = "1234567890123456789";   // 19 digits
+    CHECK(!ValidateBatch(t.batch, err));
+    auto v = ParseBatchStrict("ВЫБРАТЬ О.Х ИЗ РегистрСведений.Цены.Срез(1) КАК О");
+    CHECK(v.ok);
+    for (int i = 0; i < 40; ++i) OneSelect(v)->from[0].vt_params.push_back(nullptr);
+    CHECK(!ValidateBatch(v.batch, err));
+    CHECK(err.pos.line >= 1);
+    auto p = ParseBatchStrict("ВЫБРАТЬ А.Х ИЗ Справочник.А КАК А ИТОГИ ПО А.Х ПЕРИОДАМИ(1, 2, 3)");
+    CHECK(p.ok);
+    auto& item = OneSelect(p)->totals_by[0];
+    for (int i = 0; i < 3; ++i) item.periods_args.push_back(item.periods_args[0]);
+    CHECK(!ValidateBatch(p.batch, err));
+    CHECK(Bad("ВЫБРАТЬ О.Х ИЗ РегистрСведений.Цены.Срез(1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,16,17,18,19,20,21,22,23,24,25,26,27,28,29,30,31,32,33) КАК О"));
+    CHECK(Bad("ВЫБРАТЬ ПЕРВЫЕ 1234567890123456789 1"));
+}
+TEST(StrictParser, ValidateBatchNegativesOnTamperedTrees) {
+    const char* base =
+        "ВЫБРАТЬ А.Х ПОМЕСТИТЬ ВТ ИЗ РегистрСведений.Р.Срез(&Д) КАК А "
+        "ЛЕВОЕ СОЕДИНЕНИЕ Справочник.Б КАК Б ПО А.Х = Б.Ссылка "
+        "ГДЕ А.Х = 1 СГРУППИРОВАТЬ ПО А.Х ИМЕЮЩИЕ А.Х > 0 УПОРЯДОЧИТЬ ПО А.Х "
+        "ИТОГИ СУММА(А.Х) ПО ОБЩИЕ, А.Х ИЕРАРХИЯ";
+    ParseError err;
+    auto fresh = [&]() {
+        auto r = ParseBatchStrict(base);
+        CHECK(r.ok);
+        return r;
+    };
+    { auto r = fresh(); OneSelect(r)->from[0].vt_params[0].reset(); CHECK(ValidateBatch(r.batch, err)); }
+    { auto r = fresh(); OneSelect(r)->from[0].vt_params[0] = std::make_shared<Expr>(); CHECK(!ValidateBatch(r.batch, err)); }
+    { auto r = fresh(); OneSelect(r)->from[0].subquery = std::make_shared<Select>(); CHECK(!ValidateBatch(r.batch, err)); }
+    { auto r = fresh(); OneSelect(r)->from[0].kind = Source::K::Table; CHECK(!ValidateBatch(r.batch, err)); }
+    { auto r = fresh(); OneSelect(r)->from[0].kind = Source::K::Subquery; CHECK(!ValidateBatch(r.batch, err)); }
+    { auto r = fresh(); OneSelect(r)->joins[0][0].on.reset(); CHECK(!ValidateBatch(r.batch, err)); CHECK(err.pos.line >= 1); CHECK(err.pos.offset > 0); }
+    { auto r = fresh(); OneSelect(r)->joins[0][0].source.name = "1bad"; CHECK(!ValidateBatch(r.batch, err)); CHECK(err.pos.offset > 0); }
+    { auto r = fresh(); OneSelect(r)->order_by[0].expr.reset(); CHECK(!ValidateBatch(r.batch, err)); }
+    { auto r = fresh(); OneSelect(r)->group_by[0].reset(); CHECK(!ValidateBatch(r.batch, err)); }
+    { auto r = fresh(); OneSelect(r)->having = std::make_shared<Expr>(); CHECK(!ValidateBatch(r.batch, err)); }
+    { auto r = fresh(); OneSelect(r)->where.reset(); CHECK(ValidateBatch(r.batch, err)); }
+    { auto r = fresh(); OneSelect(r)->totals_overall = false; CHECK(!ValidateBatch(r.batch, err)); }
+    { auto r = fresh(); OneSelect(r)->totals_by[0].expr = Make(Expr::K::NullLit); CHECK(!ValidateBatch(r.batch, err)); }
+    { auto r = fresh(); OneSelect(r)->totals_by[1].only_hierarchy = true; OneSelect(r)->totals_by[1].hierarchy = false; CHECK(!ValidateBatch(r.batch, err)); }
+    { auto r = fresh(); OneSelect(r)->totals_by[1].periods = true; CHECK(!ValidateBatch(r.batch, err)); }
+    { auto r = fresh(); OneSelect(r)->has_totals = false; CHECK(!ValidateBatch(r.batch, err)); }
+    { auto r = fresh(); OneSelect(r)->totals_aggregates[0].reset(); CHECK(!ValidateBatch(r.batch, err)); }
+    { auto r = fresh(); OneSelect(r)->items[0].alias = "1x"; CHECK(!ValidateBatch(r.batch, err)); }
+    { auto r = fresh(); OneSelect(r)->for_update_tables.push_back("Т"); CHECK(!ValidateBatch(r.batch, err)); }
+}
+TEST(StrictParser, ValidateBatchBudgetAndCycles) {
+    ParseError err;
+    SelectItem w;
+    w.wildcard = true;
+    Batch b;
+    Statement st;
+    st.select = std::make_shared<Select>();
+    st.select->items.assign(kMaxExprNodes + 10, w);
+    b.statements.push_back(st);
+    CHECK(!ValidateBatch(b, err));
+    CHECK_EQ(err.code, std::string("Q_PARSE_LIMIT"));
+    // A Select that is its own FROM subquery must terminate with an error.
+    auto s = std::make_shared<Select>();
+    s->items.push_back(w);
+    Source src;
+    src.kind = Source::K::Subquery;
+    src.subquery = s;
+    src.alias = "П";
+    s->from.push_back(src);
+    s->joins.emplace_back();
+    Batch c;
+    Statement cs;
+    cs.select = s;
+    c.statements.push_back(cs);
+    CHECK(!ValidateBatch(c, err));
+    CHECK_EQ(err.code, std::string("Q_PARSE_LIMIT"));
+    s->from.clear();
+    s->joins.clear();
+    // A union part that is the statement itself is malformed and must not loop.
+    Select::UnionPart up;
+    up.select = s;
+    s->unions.push_back(up);
+    CHECK(!ValidateBatch(c, err));
+    s->unions.clear();   // break the cycles so the shared_ptrs are released
+}
+TEST(StrictParser, FailuresCarryPositions) {
+    for (const char* q : {"", ";", "ВЫБРАТЬ", "ВЫБРАТЬ Х ИЗ", "ВЫБРАТЬ 1 ПОМЕСТИТЬ А.Б", "ВЫБРАТЬ Х ИЗ А {Б}",
+                          "ВЫБРАТЬ Х ИЗ А ЛЕВОЕ СОЕДИНЕНИЕ Б КАК Б", "ВЫБРАТЬ 1 ОБЪЕДИНИТЬ ВЫБРАТЬ 2 ПОМЕСТИТЬ В"}) {
+        auto r = ParseBatchStrict(q);
+        CHECK(!r.ok);
+        CHECK(r.error.pos.line >= 1);
+        CHECK(r.error.pos.col >= 1);
+    }
+}
+TEST(StrictParser, SemicolonInsideStringAndComment) {
+    auto r = ParseBatchStrict("ВЫБРАТЬ \"а;б\" КАК Х; ВЫБРАТЬ 2");
+    CHECK(r.ok);
+    CHECK_EQ(r.batch.statements.size(), 2u);
+    auto c = ParseBatchStrict("ВЫБРАТЬ 1 // комментарий; УНИЧТОЖИТЬ ВТ\n; ВЫБРАТЬ 2");
+    CHECK(c.ok);
+    CHECK_EQ(c.batch.statements.size(), 2u);
+    CHECK(c.batch.statements[1].kind == Statement::K::Select);
+}
+TEST(StrictParser, PerPartModifiersInUnion) {
+    auto r = ParseBatchStrict("ВЫБРАТЬ РАЗЛИЧНЫЕ ПЕРВЫЕ 5 1 КАК Х ОБЪЕДИНИТЬ ВЫБРАТЬ РАЗРЕШЕННЫЕ ПЕРВЫЕ 7 2 ОБЪЕДИНИТЬ ВСЕ ВЫБРАТЬ 3");
+    CHECK(r.ok);
+    auto s = OneSelect(r);
+    CHECK(s->distinct && s->top == "5" && !s->allowed);
+    CHECK(!s->unions[0].select->distinct && s->unions[0].select->top == "7" && s->unions[0].select->allowed);
+    CHECK(s->unions[1].all && s->unions[1].select->top.empty());
+}
+TEST(StrictParser, SubqueryInVirtualTableParamIsWalked) {
+    auto r = ParseBatchStrict("ВЫБРАТЬ О.Х ИЗ РегистрСведений.Р.Срез(, Х В (ВЫБРАТЬ 1 КАК А)) КАК О");
+    CHECK(r.ok);
+    const auto& params = OneSelect(r)->from[0].vt_params;
+    CHECK_EQ(params.size(), 2u);
+    CHECK(params[0] == nullptr);
+    CHECK(params[1] && params[1]->kind == Expr::K::InSubquery && params[1]->subquery);
+    ParseError err;
+    params[1]->subquery->items[0].expr->kind = Expr::K::Unset;
+    CHECK(!ValidateBatch(r.batch, err));
 }

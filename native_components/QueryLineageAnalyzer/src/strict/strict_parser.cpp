@@ -50,6 +50,9 @@ bool IsComparisonOp(const Token& t) {
 
 bool IsIntegerText(const std::string& s);
 
+constexpr size_t kMaxTopDigits = 18;
+constexpr size_t kMaxPeriodsArgs = 4;
+
 bool IsIdentChar(const std::string& s, size_t i, size_t& len, bool first) {
     const unsigned char c = static_cast<unsigned char>(s[i]);
     len = 1;
@@ -238,10 +241,9 @@ public:
     ExprP Predicate();
     ExprP Primary();
 
-    std::shared_ptr<Select> SelectStmt() {
-        // Subquery bodies belong to the statement grammar (a later task). Until then they are rejected.
-        Error("Q_PARSE_UNSUPPORTED", "subquery");
-    }
+    // A nested query (subquery body): the same grammar as a statement, except that ПОМЕСТИТЬ is not allowed.
+    std::shared_ptr<Select> SelectStmt() { return Query(false); }
+    Batch ParseBatch();
 
 private:
     // True when the next tokens start another predicate: a chain such as `a = b = c` or `x В (1) В (2)`.
@@ -284,6 +286,22 @@ private:
         if (t.kind == Tk::Identifier) return NormalizeIdentifierKey(t.text) == "ИЕРАРХИИ";
         return t.kind == Tk::Keyword && t.kw == Kw::Hierarchy && NormalizeIdentifierKey(t.text) == "HIERARCHY";
     }
+
+    // ---- statements ----
+    std::shared_ptr<Select> Query(bool top);
+    std::shared_ptr<Select> SelectCore(bool allow_into);
+    SelectItem ItemClause();
+    bool WildcardAhead() const;
+    Source SourceClause();
+    Join JoinClause();
+    bool AtJoin() const {
+        return IsKw(Kw::Join) || IsKw(Kw::Left) || IsKw(Kw::Right) || IsKw(Kw::Inner) || IsKw(Kw::Full);
+    }
+    std::string AliasName();
+    std::string SingleName();
+    std::vector<ExprP> ExprList();
+    void OrderClause(Select& s);
+    void TotalsClause(Select& s);
 
     ExprP IdentifierExpr();
     ExprP KeywordExpr();
@@ -575,25 +593,436 @@ ExprP P::Paren() {
     return Seal(std::move(row));
 }
 
+// ---- statements ----
+
+std::string P::AliasName() {
+    if (Peek().kind != Tk::Identifier) Error("Q_PARSE_EXPECTED", "alias expected");
+    const Token& t = Next();
+    CheckName(t);
+    return t.text;
+}
+
+// A name with exactly one segment (temporary table, alias): no dots.
+std::string P::SingleName() {
+    std::string name = AliasName();
+    if (Peek().kind == Tk::Dot) Error("Q_PARSE_UNEXPECTED", "qualified name not allowed here");
+    return name;
+}
+
+std::vector<ExprP> P::ExprList() {
+    std::vector<ExprP> v;
+    do {
+        v.push_back(Expr());
+    } while (Accept(Tk::Comma));
+    return v;
+}
+
+// Name '.' ... '.' '*' : a wildcard over a path (Т.*), checked without consuming.
+bool P::WildcardAhead() const {
+    size_t k = 0;
+    if (Peek(k).kind != Tk::Identifier) return false;
+    for (;;) {
+        ++k;
+        if (Peek(k).kind != Tk::Dot) return false;
+        ++k;
+        if (Peek(k).kind == Tk::Op && Peek(k).text == "*") return true;
+        if (Peek(k).kind != Tk::Identifier) return false;
+    }
+}
+
+SelectItem P::ItemClause() {
+    SelectItem it;
+    it.pos = Here();
+    if (IsOp("*")) {
+        Next();
+        it.wildcard = true;
+        return it;
+    }
+    if (WildcardAhead()) {
+        it.wildcard = true;
+        while (!IsOp("*")) {
+            const Token& seg = Next();
+            CheckName(seg);
+            it.wildcard_prefix.push_back(seg.text);
+            Expect(Tk::Dot);
+        }
+        Next();   // *
+        return it;
+    }
+    it.expr = Expr();
+    if (AcceptKw(Kw::As)) {
+        it.alias = AliasName();
+        it.alias_explicit = true;
+    } else if (Peek().kind == Tk::Identifier) {
+        it.alias = AliasName();
+    }
+    return it;
+}
+
+Source P::SourceClause() {
+    Source src;
+    src.pos = Here();
+    if (Peek().kind == Tk::LParen) {
+        Next();
+        if (!IsKw(Kw::Select)) Error("Q_PARSE_EXPECTED", "subquery expected");
+        src.kind = Source::K::Subquery;
+        src.subquery = Query(false);
+        Expect(Tk::RParen);
+        AcceptKw(Kw::As);
+        src.alias = AliasName();   // a subquery source always needs an alias
+        return src;
+    }
+    if (Peek().kind != Tk::Identifier) Error("Q_PARSE_EXPECTED", "table expected");
+    src.name = DottedName(1);
+    if (Peek().kind == Tk::LParen) {
+        Next();
+        src.kind = Source::K::VirtualTable;
+        if (Peek().kind != Tk::RParen) {
+            for (;;) {
+                if (src.vt_params.size() >= kMaxVirtualTableParams) Error("Q_PARSE_LIMIT", "too many table parameters");
+                if (Peek().kind == Tk::Comma || Peek().kind == Tk::RParen) src.vt_params.push_back(nullptr);
+                else src.vt_params.push_back(Expr());
+                if (!Accept(Tk::Comma)) break;
+            }
+        }
+        Expect(Tk::RParen);
+    }
+    if (AcceptKw(Kw::As)) src.alias = AliasName();
+    else if (Peek().kind == Tk::Identifier) src.alias = AliasName();
+    return src;
+}
+
+Join P::JoinClause() {
+    Join j;
+    j.pos = Here();
+    if (AcceptKw(Kw::Left)) {
+        j.kind = Join::K::Left;
+        AcceptKw(Kw::Outer);
+    } else if (AcceptKw(Kw::Right)) {
+        j.kind = Join::K::Right;
+        AcceptKw(Kw::Outer);
+    } else if (AcceptKw(Kw::Full)) {
+        j.kind = Join::K::Full;
+        AcceptKw(Kw::Outer);
+    } else if (AcceptKw(Kw::Inner)) {
+        j.kind = Join::K::Inner;
+    }
+    ExpectKw(Kw::Join);
+    j.source = SourceClause();
+    ExpectKw(Kw::Po);
+    j.on = Expr();
+    return j;
+}
+
+std::shared_ptr<Select> P::SelectCore(bool allow_into) {
+    auto s = std::make_shared<Select>();
+    s->pos = Here();
+    ExpectKw(Kw::Select);
+    s->allowed = AcceptKw(Kw::Allowed);
+    s->distinct = AcceptKw(Kw::Distinct);
+    if (AcceptKw(Kw::Top)) {
+        if (Peek().kind != Tk::Number || !IsIntegerText(Peek().text) || Peek().text.size() > kMaxTopDigits) {
+            Error("Q_PARSE_EXPECTED", "integer expected after ПЕРВЫЕ");
+        }
+        s->top = Next().text;
+    }
+    do {
+        s->items.push_back(ItemClause());
+    } while (Accept(Tk::Comma));
+    if (IsKw(Kw::Into)) {
+        if (!allow_into) Error("Q_PARSE_UNEXPECTED", "ПОМЕСТИТЬ is allowed only in the first query of a statement");
+        Next();
+        s->into = SingleName();
+    }
+    if (AcceptKw(Kw::From)) {
+        do {
+            s->from.push_back(SourceClause());
+            s->joins.emplace_back();
+            while (AtJoin()) s->joins.back().push_back(JoinClause());
+        } while (Accept(Tk::Comma));
+    }
+    if (AcceptKw(Kw::Where)) s->where = Expr();
+    if (AcceptKw(Kw::Group)) {
+        ExpectKw(Kw::Po);
+        s->group_by = ExprList();
+    }
+    if (AcceptKw(Kw::Having)) s->having = Expr();
+    if (AcceptKw(Kw::For)) {
+        ExpectKw(Kw::Update);
+        s->for_update = true;
+        if (Peek().kind == Tk::Identifier) {
+            do {
+                s->for_update_tables.push_back(DottedName(1));
+            } while (Accept(Tk::Comma));
+        }
+    }
+    if (AcceptKw(Kw::Index)) {
+        ExpectKw(Kw::Po);
+        s->index_by = ExprList();
+        if (s->into.empty()) Error("Q_PARSE_UNEXPECTED", "ИНДЕКСИРОВАТЬ ПО needs ПОМЕСТИТЬ in the same query");
+    }
+    // Attachment of these clauses to a union is not verified against the platform: fail closed.
+    if ((s->for_update || !s->index_by.empty()) && IsKw(Kw::Union)) {
+        Error("Q_PARSE_AMBIGUOUS_CLAUSE", "ДЛЯ ИЗМЕНЕНИЯ / ИНДЕКСИРОВАТЬ ПО before ОБЪЕДИНИТЬ");
+    }
+    return s;
+}
+
+void P::OrderClause(Select& s) {
+    Next();   // УПОРЯДОЧИТЬ
+    ExpectKw(Kw::Po);
+    do {
+        OrderItem it;
+        it.expr = Expr();
+        if (AcceptKw(Kw::Desc)) it.desc = true;
+        else AcceptKw(Kw::Asc);
+        s.order_by.push_back(std::move(it));
+    } while (Accept(Tk::Comma));
+}
+
+void P::TotalsClause(Select& s) {
+    Next();   // ИТОГИ
+    s.has_totals = true;
+    if (!IsKw(Kw::Po)) s.totals_aggregates = ExprList();
+    ExpectKw(Kw::Po);
+    do {
+        TotalsItem it;
+        if (AcceptKw(Kw::Overall)) {
+            it.overall = true;
+            s.totals_overall = true;
+        } else {
+            it.expr = Expr();
+            if (AcceptKw(Kw::Only)) {
+                ExpectKw(Kw::Hierarchy);
+                it.hierarchy = true;
+                it.only_hierarchy = true;
+            } else if (AcceptKw(Kw::Hierarchy)) {
+                it.hierarchy = true;
+            } else if (AcceptKw(Kw::Periods)) {
+                it.periods = true;
+                Expect(Tk::LParen);
+                it.periods_args = ExprList();
+                Expect(Tk::RParen);
+                if (it.periods_args.size() > kMaxPeriodsArgs) Error("Q_PARSE_LIMIT", "too many arguments");
+            }
+            if (AcceptKw(Kw::As)) it.alias = AliasName();
+        }
+        s.totals_by.push_back(std::move(it));
+    } while (Accept(Tk::Comma));
+}
+
+// query := select_core (ОБЪЕДИНИТЬ [ВСЕ] select_core)* [order] [АВТОУПОРЯДОЧИВАНИЕ] [totals]
+std::shared_ptr<Select> P::Query(bool top) {
+    Guard g(*this);
+    std::shared_ptr<Select> head = SelectCore(top);
+    while (IsKw(Kw::Union)) {
+        if (head->unions.size() >= kMaxUnionParts) Error("Q_PARSE_LIMIT", "too many union parts");
+        Next();
+        Select::UnionPart part;
+        part.all = AcceptKw(Kw::All);
+        part.select = SelectCore(false);
+        head->unions.push_back(std::move(part));
+    }
+    if (IsKw(Kw::Order)) OrderClause(*head);
+    if (AcceptKw(Kw::Autoorder)) head->autoorder = true;
+    if (IsKw(Kw::Totals)) TotalsClause(*head);
+    return head;
+}
+
+Batch P::ParseBatch() {
+    Batch b;
+    for (;;) {
+        if (b.statements.size() >= kMaxBatchStatements) Error("Q_PARSE_LIMIT", "too many statements");
+        Statement st;
+        st.pos = Here();
+        if (AcceptKw(Kw::Drop)) {
+            st.kind = Statement::K::Drop;
+            st.drop_name = SingleName();
+        } else if (IsKw(Kw::Select)) {
+            st.kind = Statement::K::Select;
+            st.select = Query(true);
+        } else {
+            Error("Q_PARSE_EXPECTED", "statement expected");
+        }
+        b.statements.push_back(std::move(st));
+        if (!Accept(Tk::Semicolon)) break;
+        if (Peek().kind == Tk::End) break;
+    }
+    ExpectEnd();
+    return b;
+}
+
 }  // namespace
 
-bool ValidateExpr(const ExprP& root, ParseError& err) {
-    struct Item {
-        const Expr* e;
-        int depth;
-        bool row_ok;
+namespace {
+
+// Work item of the iterative tree walk. An item is either an expression (e) or a Select (s).
+// sel_kind: 0 = statement-level query (ПОМЕСТИТЬ allowed), 1 = nested subquery, 2 = union part.
+struct Item {
+    const Expr* e = nullptr;
+    const Select* s = nullptr;
+    int depth = 1;       // expression depth, restarts inside every Select
+    int sel_depth = 1;   // subquery nesting depth
+    int sel_kind = 0;
+    bool row_ok = false;
+};
+
+bool BadSelect(ParseError& err, const Select& s, const char* why) {
+    err = ParseError{"Q_PARSE_INVALID_NODE", s.pos, why};
+    return false;
+}
+
+bool BadAt(ParseError& err, const Pos& pos, const char* why) {
+    err = ParseError{"Q_PARSE_INVALID_NODE", pos, why};
+    return false;
+}
+
+bool TooLarge(ParseError& err, const Select& s) {
+    err = ParseError{"Q_PARSE_LIMIT", s.pos, "query too large"};
+    return false;
+}
+
+bool CheckSource(const Source& src, const Select& s, const Item& it, std::vector<Item>& stack, ParseError& err) {
+    if (!src.alias.empty() && !IsValidIdent(src.alias)) return BadAt(err, src.pos, "source alias");
+    if (src.kind != Source::K::Subquery) {
+        if (src.subquery || !IsValidDotted(src.name)) return BadAt(err, src.pos, "source name");
+        if (src.kind == Source::K::Table && !src.vt_params.empty()) return BadAt(err, src.pos, "table parameters");
+        if (src.vt_params.size() > kMaxVirtualTableParams) return BadAt(err, src.pos, "too many table parameters");
+        for (const ExprP& p : src.vt_params) {
+            if (p) stack.push_back(Item{p.get(), nullptr, 1, it.sel_depth, 0, false});
+        }
+        return true;
+    }
+    if (!src.subquery || !src.name.empty() || !src.vt_params.empty() || src.alias.empty()) {
+        return BadAt(err, src.pos, "subquery source");
+    }
+    stack.push_back(Item{nullptr, src.subquery.get(), 1, it.sel_depth + 1, 1, false});
+    return true;
+}
+
+bool CheckTotals(const Select& s, const Item& it, std::vector<Item>& stack, ParseError& err) {
+    if (!s.has_totals) {
+        if (!s.totals_aggregates.empty() || !s.totals_by.empty() || s.totals_overall) {
+            return BadSelect(err, s, "totals data without ИТОГИ");
+        }
+        return true;
+    }
+    if (s.totals_by.empty()) return BadSelect(err, s, "ИТОГИ without ПО");
+    bool any_overall = false;
+    for (const ExprP& a : s.totals_aggregates) {
+        if (!a) return BadSelect(err, s, "null totals aggregate");
+        stack.push_back(Item{a.get(), nullptr, 1, it.sel_depth, 0, false});
+    }
+    for (const TotalsItem& t : s.totals_by) {
+        if (!t.alias.empty() && !IsValidIdent(t.alias)) return BadSelect(err, s, "totals alias");
+        if (t.overall) {
+            any_overall = true;
+            if (t.expr || t.hierarchy || t.only_hierarchy || t.periods || !t.periods_args.empty() || !t.alias.empty()) {
+                return BadSelect(err, s, "totals overall item");
+            }
+            continue;
+        }
+        if (!t.expr) return BadSelect(err, s, "null totals expression");
+        stack.push_back(Item{t.expr.get(), nullptr, 1, it.sel_depth, 0, false});
+        if (t.only_hierarchy && !t.hierarchy) return BadSelect(err, s, "totals hierarchy flags");
+        if (t.periods && t.hierarchy) return BadSelect(err, s, "totals periods with hierarchy");
+        if (t.periods != !t.periods_args.empty() || t.periods_args.size() > kMaxPeriodsArgs) {
+            return BadSelect(err, s, "totals periods arguments");
+        }
+        for (const ExprP& a : t.periods_args) {
+            if (!a) return BadSelect(err, s, "null periods argument");
+            stack.push_back(Item{a.get(), nullptr, 1, it.sel_depth, 0, false});
+        }
+    }
+    if (any_overall != s.totals_overall) return BadSelect(err, s, "totals overall flag");
+    return true;
+}
+
+// Shape check of one Select; children are pushed on the stack. `visited` counts clause elements too.
+bool CheckSelect(const Item& it, std::vector<Item>& stack, size_t& visited, ParseError& err) {
+    const Select& s = *it.s;
+    auto push = [&](const ExprP& e, const char* why) {
+        if (!e) return BadSelect(err, s, why);
+        stack.push_back(Item{e.get(), nullptr, 1, it.sel_depth, 0, false});
+        return true;
     };
+    if (it.sel_depth > kMaxParseDepth) {
+        err = ParseError{"Q_PARSE_LIMIT", s.pos, "subqueries nested too deep"};
+        return false;
+    }
+    if (s.items.empty()) return BadSelect(err, s, "no select items");
+    if (!s.top.empty() && (!IsIntegerText(s.top) || s.top.size() > kMaxTopDigits)) return BadSelect(err, s, "top");
+    if (!s.into.empty() && (it.sel_kind != 0 || !IsValidIdent(s.into))) return BadSelect(err, s, "into");
+    for (const SelectItem& si : s.items) {
+        if (++visited > kMaxExprNodes) return TooLarge(err, s);
+        if (!si.alias.empty() && !IsValidIdent(si.alias)) return BadSelect(err, s, "item alias");
+        if (si.alias_explicit && si.alias.empty()) return BadSelect(err, s, "item alias flag");
+        if (si.wildcard) {
+            if (si.expr || !si.alias.empty()) return BadSelect(err, s, "wildcard item");
+            for (const std::string& p : si.wildcard_prefix) {
+                if (!IsValidIdent(p)) return BadSelect(err, s, "wildcard prefix");
+            }
+        } else {
+            if (!si.wildcard_prefix.empty()) return BadSelect(err, s, "item prefix");
+            if (!push(si.expr, "null item expression")) return false;
+        }
+    }
+    if (s.joins.size() != s.from.size()) return BadSelect(err, s, "joins do not match sources");
+    for (size_t i = 0; i < s.from.size(); ++i) {
+        if (++visited > kMaxExprNodes) return TooLarge(err, s);
+        if (!CheckSource(s.from[i], s, it, stack, err)) return false;
+        for (const Join& j : s.joins[i]) {
+            if (++visited > kMaxExprNodes) return TooLarge(err, s);
+            if (!CheckSource(j.source, s, it, stack, err)) return false;
+            if (!j.on) return BadAt(err, j.pos, "join without condition");
+            stack.push_back(Item{j.on.get(), nullptr, 1, it.sel_depth, 0, false});
+        }
+    }
+    if (s.where && !push(s.where, "where")) return false;
+    if (s.having && !push(s.having, "having")) return false;
+    for (const ExprP& g : s.group_by) {
+        if (!push(g, "null group expression")) return false;
+    }
+    for (const ExprP& g : s.index_by) {
+        if (!push(g, "null index expression")) return false;
+    }
+    if (!s.for_update && !s.for_update_tables.empty()) return BadSelect(err, s, "for-update tables");
+    for (const std::string& t : s.for_update_tables) {
+        if (!IsValidDotted(t)) return BadSelect(err, s, "for-update table");
+    }
+    if (it.sel_kind == 2 && (!s.unions.empty() || !s.order_by.empty() || s.autoorder || s.has_totals)) {
+        return BadSelect(err, s, "union part carries statement clauses");
+    }
+    if (!s.index_by.empty() && s.into.empty()) return BadSelect(err, s, "index without ПОМЕСТИТЬ");
+    if (s.unions.size() > kMaxUnionParts) {
+        err = ParseError{"Q_PARSE_LIMIT", s.pos, "too many union parts"};
+        return false;
+    }
+    for (const Select::UnionPart& u : s.unions) {
+        if (!u.select) return BadSelect(err, s, "null union part");
+        stack.push_back(Item{nullptr, u.select.get(), 1, it.sel_depth, 2, false});
+    }
+    for (const OrderItem& o : s.order_by) {
+        if (!push(o.expr, "null order expression")) return false;
+    }
+    return CheckTotals(s, it, stack, err);
+}
+
+bool Walk(std::vector<Item> stack, ParseError& err) {
     auto bad = [&](const Expr* e, const char* why) {
         err = ParseError{"Q_PARSE_INVALID_NODE", e ? e->pos : Pos{}, why};
         return false;
     };
-    if (!root) return bad(nullptr, "null expression");
 
     size_t visited = 0;
-    std::vector<Item> stack{{root.get(), 1, false}};
     while (!stack.empty()) {
         const Item it = stack.back();
         stack.pop_back();
+        if (it.s) {
+            if (++visited > kMaxExprNodes) return TooLarge(err, *it.s);
+            if (!CheckSelect(it, stack, visited, err)) return false;
+            continue;
+        }
         const Expr& e = *it.e;
         if (it.depth > kMaxExprDepth || ++visited > kMaxExprNodes) {
             err = ParseError{"Q_PARSE_LIMIT", e.pos, "expression too large"};
@@ -710,10 +1139,48 @@ bool ValidateExpr(const ExprP& root, ParseError& err) {
         }
         for (size_t i = 0; i < n; ++i) {
             const bool row_ok = i == 0 && sub_kind && e.subquery != nullptr;
-            stack.push_back({e.args[i].get(), it.depth + 1, row_ok});
+            stack.push_back(Item{e.args[i].get(), nullptr, it.depth + 1, it.sel_depth, 0, row_ok});
         }
+        if (e.subquery) stack.push_back(Item{nullptr, e.subquery.get(), 1, it.sel_depth + 1, 1, false});
     }
     return true;
+}
+
+}  // namespace
+
+bool ValidateExpr(const ExprP& root, ParseError& err) {
+    if (!root) {
+        err = ParseError{"Q_PARSE_INVALID_NODE", Pos{}, "null expression"};
+        return false;
+    }
+    return Walk({Item{root.get(), nullptr, 1, 1, 0, false}}, err);
+}
+
+bool ValidateBatch(const Batch& batch, ParseError& err) {
+    if (batch.statements.empty()) {
+        err = ParseError{"Q_PARSE_INVALID_NODE", Pos{}, "empty batch"};
+        return false;
+    }
+    if (batch.statements.size() > kMaxBatchStatements) {
+        err = ParseError{"Q_PARSE_LIMIT", Pos{}, "too many statements"};
+        return false;
+    }
+    std::vector<Item> roots;
+    for (const Statement& st : batch.statements) {
+        if (st.kind == Statement::K::Drop) {
+            if (st.select || !IsValidIdent(st.drop_name)) {
+                err = ParseError{"Q_PARSE_INVALID_NODE", st.pos, "drop statement"};
+                return false;
+            }
+        } else {
+            if (!st.select || !st.drop_name.empty()) {
+                err = ParseError{"Q_PARSE_INVALID_NODE", st.pos, "select statement"};
+                return false;
+            }
+            roots.push_back(Item{nullptr, st.select.get(), 1, 1, 0, false});
+        }
+    }
+    return Walk(std::move(roots), err);
 }
 
 ExprResult ParseExpressionForTest(const std::string& utf8) {
@@ -739,17 +1206,21 @@ ExprResult ParseExpressionForTest(const std::string& utf8) {
 }
 
 ParseResult ParseBatchStrict(const std::string& utf8) {
-    // The statement grammar (batches, clauses, subqueries) is a later task: until it lands, nothing parses.
     ParseResult r;
-    r.error = ParseError{"Q_PARSE_UNSUPPORTED", Pos{}, "statement grammar not implemented"};
     try {
-        for (const Token& t : Tokenize(utf8)) {
-            if (t.kind != Tk::Unknown) continue;
-            const bool limit = t.text == "<size>" || t.text == "<limit>";
-            r.error = ParseError{limit ? "Q_PARSE_LIMIT" : "Q_PARSE_TOKEN", Pos{t.pos, t.line, t.col}, ""};
-            break;
-        }
+        P p(Tokenize(utf8));
+        p.Prescan();
+        r.batch = p.ParseBatch();
+        ParseError err;
+        if (!ValidateBatch(r.batch, err)) throw Fail{err};
+        r.ok = true;
+    } catch (const Fail& f) {
+        r.ok = false;
+        r.batch = Batch{};
+        r.error = f.e;
     } catch (...) {
+        r.ok = false;
+        r.batch = Batch{};
         r.error = ParseError{"Q_PARSE_INTERNAL", Pos{0, 1, 1}, "internal error"};
     }
     return r;
