@@ -1090,6 +1090,9 @@
 									<CheckBoxType>Auto</CheckBoxType>
 									<ContextMenu name="ФлагСтрогийРежимАнонимизацииКонтекстноеМеню" id="268"/>
 									<ExtendedTooltip name="ФлагСтрогийРежимАнонимизацииРасширеннаяПодсказка" id="269"/>
+									<Events>
+										<Event name="OnChange">СтрогийРежимАнонимизацииПриИзменении</Event>
+									</Events>
 								</CheckBoxField>
 								<Button name="КнопкаНастроитьТочнуюАнонимизацию" id="92">
 									<Type>UsualButton</Type>
