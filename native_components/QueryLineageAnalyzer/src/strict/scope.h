@@ -29,6 +29,8 @@ constexpr const char* kResolveUnknownField = "RESOLVE_UNKNOWN_FIELD";
 constexpr const char* kResolveUnknownTemp = "RESOLVE_UNKNOWN_TEMP_TABLE";
 constexpr const char* kResolveUnknownSource = "RESOLVE_UNKNOWN_SOURCE";
 constexpr const char* kResolveColumnMismatch = "RESOLVE_COLUMN_MISMATCH";
+// Mirrored as Q_PARSE_UNION_ARITY: the parts of an ОБЪЕДИНИТЬ return different numbers of columns.
+constexpr const char* kResolveUnionArity = "PARSE_UNION_ARITY";
 constexpr const char* kResolveUnknownParam = "RESOLVE_UNKNOWN_PARAM";
 constexpr const char* kResolveBadStatement = "RESOLVE_BAD_STATEMENT";
 

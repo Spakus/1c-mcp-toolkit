@@ -140,7 +140,7 @@ TEST(Origin, UnionJoinsColumnsPositionally) {
     auto mismatch = AnalyzeForTest(kPolicyAB,
         "ВЫБРАТЬ Б.Сумма КАК Х ИЗ Справочник.Б КАК Б ОБЪЕДИНИТЬ ВЫБРАТЬ А.Имя, А.Код ИЗ Справочник.А КАК А");
     CHECK_EQ(FirstOrigin(mismatch), Origin::Unknown);
-    CHECK(HasIssue(mismatch, kResolveColumnMismatch));
+    CHECK(HasIssue(mismatch, kResolveUnionArity));
 }
 
 TEST(Origin, CompositeRefsJoinAllTargets) {
@@ -811,4 +811,159 @@ TEST(Origin, VirtualTableEarlierSlotsMayNotBeProtected) {
         "Q_VT_PARAM"));
     CHECK(HasReason(AnalyzeForTest(kPolicyVT,
         "ВЫБРАТЬ О.СуммаОстаток КАК С ИЗ " + vt + "(, Контрагент.Имя = &МСПТокен1, ) КАК О"), "Q_VT_PARAM"));
+}
+
+// ---- Task 19: propagation through temp tables, UNION and subqueries ----
+
+TEST(Origin, UnionOfProtectedAndClientIsMixed) {
+    auto r = AnalyzeForTest(kPolicyAB,
+        "ВЫБРАТЬ А.Имя КАК Х ИЗ Справочник.А КАК А ОБЪЕДИНИТЬ ВСЕ ВЫБРАТЬ \"догадка\"");
+    CHECK_EQ(r.columns.at(0).origin, Origin::Mixed);
+    CHECK(HasReason(r, "Q_MIXED_COLUMN"));
+}
+
+TEST(Origin, UnionArityMismatchIsRejected) {
+    auto r = AnalyzeForTest(kPolicyAB,
+        "ВЫБРАТЬ Б.Сумма КАК Х ИЗ Справочник.Б КАК Б ОБЪЕДИНИТЬ ВСЕ ВЫБРАТЬ Б2.Сумма, Б2.Код ИЗ Справочник.Б КАК Б2");
+    CHECK(HasReason(r, "Q_PARSE_UNION_ARITY"));
+    CHECK(r.verdict == Verdict::Confirm);
+}
+
+TEST(Origin, TempTableLaunderingKeepsTaint) {
+    auto r = AnalyzeForTest(kPolicyAB,
+        "ВЫБРАТЬ ГОД(А.Имя) КАК Х ПОМЕСТИТЬ ВТ ИЗ Справочник.А КАК А; ВЫБРАТЬ ВТ.Х КАК Х ИЗ ВТ КАК ВТ");
+    CHECK(HasReason(r, "Q_FUNC_OVER_PROTECTED"));               // flagged where it happens
+    CHECK_EQ(r.columns.at(0).origin, Origin::ProtectedDerived); // and stays derived
+}
+
+TEST(Origin, ClientColumnThroughTempTableIsStillClient) {
+    auto r = AnalyzeForTest(kPolicyAB,
+        "ВЫБРАТЬ \"x\" КАК Г ПОМЕСТИТЬ ВТ; ВЫБРАТЬ А.Ссылка КАК С ИЗ Справочник.А КАК А, ВТ КАК ВТ ГДЕ А.Имя = ВТ.Г");
+    CHECK(HasReason(r, "Q_EQ_CLIENT_PARAM"));
+}
+
+TEST(Origin, InSubqueryOperandOrigin) {
+    CHECK(HasReason(AnalyzeForTest(kPolicyAB,
+        "ВЫБРАТЬ А.Ссылка КАК С ИЗ Справочник.А КАК А ГДЕ А.Имя В (ВЫБРАТЬ \"x\")"), "Q_EQ_CLIENT_PARAM"));
+    CHECK(AnalyzeForTest(kPolicyAB,
+        "ВЫБРАТЬ Б.Сумма КАК С ИЗ Справочник.Б КАК Б ГДЕ Б.СсылкаНаА.Имя В (ВЫБРАТЬ А.Имя ИЗ Справочник.А КАК А)")
+        .verdict == Verdict::Safe);
+}
+
+TEST(Origin, UnionOrderTotalsChecked) {
+    CHECK(HasReason(AnalyzeForTest(kPolicyAB,
+        "ВЫБРАТЬ А.Имя КАК Х ИЗ Справочник.А КАК А ОБЪЕДИНИТЬ ВЫБРАТЬ А2.Имя ИЗ Справочник.А КАК А2 УПОРЯДОЧИТЬ ПО Х"),
+        "Q_ORDER_PROTECTED"));
+}
+
+TEST(Origin, TempTableChainsKeepTaintAndRows) {
+    // three links: the derived value stays derived
+    auto r = AnalyzeForTest(kPolicyAB,
+        "ВЫБРАТЬ ГОД(А.Имя) КАК Х ПОМЕСТИТЬ ВТ1 ИЗ Справочник.А КАК А; "
+        "ВЫБРАТЬ ВТ1.Х КАК Х ПОМЕСТИТЬ ВТ2 ИЗ ВТ1 КАК ВТ1; "
+        "ВЫБРАТЬ ВТ2.Х КАК Х ПОМЕСТИТЬ ВТ3 ИЗ ВТ2 КАК ВТ2; "
+        "ВЫБРАТЬ ВТ3.Х КАК Х ИЗ ВТ3 КАК ВТ3");
+    CHECK_EQ(r.columns.at(0).origin, Origin::ProtectedDerived);
+    CHECK(HasReason(r, "Q_FUNC_OVER_PROTECTED"));
+    // protected rows (open column, protected filter) stay protected through three links
+    auto c = AnalyzeForTest(kPolicyAB,
+        "ВЫБРАТЬ А.Ссылка КАК Р ПОМЕСТИТЬ ВТ1 ИЗ Справочник.А КАК А ГДЕ А.Имя = &МСПТокен1; "
+        "ВЫБРАТЬ ВТ1.Р КАК Р ПОМЕСТИТЬ ВТ2 ИЗ ВТ1 КАК ВТ1; "
+        "ВЫБРАТЬ ВТ2.Р КАК Р ПОМЕСТИТЬ ВТ3 ИЗ ВТ2 КАК ВТ2; "
+        "ВЫБРАТЬ КОЛИЧЕСТВО(*) КАК К ИЗ ВТ3 КАК ВТ3");
+    CHECK(HasReason(c, "Q_AGGREGATE_ROWSET"));
+}
+
+TEST(Origin, DropAndRecreateUsesTheNewTable) {
+    // protected first, clean after re-creation: the old taint must not stick
+    CHECK(AnalyzeForTest(kPolicyAB,
+        "ВЫБРАТЬ А.Ссылка КАК Р ПОМЕСТИТЬ ВТ ИЗ Справочник.А КАК А ГДЕ А.Имя = &МСПТокен1; "
+        "УНИЧТОЖИТЬ ВТ; "
+        "ВЫБРАТЬ Б.Сумма КАК Р ПОМЕСТИТЬ ВТ ИЗ Справочник.Б КАК Б; "
+        "ВЫБРАТЬ КОЛИЧЕСТВО(*) КАК К ИЗ ВТ КАК ВТ").verdict == Verdict::Safe);
+    // clean first, protected after re-creation without a drop: the new taint must be seen
+    CHECK(HasReason(AnalyzeForTest(kPolicyAB,
+        "ВЫБРАТЬ Б.Сумма КАК Р ПОМЕСТИТЬ ВТ ИЗ Справочник.Б КАК Б; "
+        "ВЫБРАТЬ А.Ссылка КАК Р ПОМЕСТИТЬ ВТ ИЗ Справочник.А КАК А ГДЕ А.Имя = &МСПТокен1; "
+        "ВЫБРАТЬ КОЛИЧЕСТВО(*) КАК К ИЗ ВТ КАК ВТ"), "Q_AGGREGATE_ROWSET"));
+    CHECK(HasReason(AnalyzeForTest(kPolicyAB,
+        "ВЫБРАТЬ Б.Сумма КАК Х ПОМЕСТИТЬ ВТ ИЗ Справочник.Б КАК Б; УНИЧТОЖИТЬ ВТ; "
+        "ВЫБРАТЬ ПОДСТРОКА(А.Имя,1,1) КАК Х ПОМЕСТИТЬ ВТ ИЗ Справочник.А КАК А; ВЫБРАТЬ ВТ.Х КАК Х ИЗ ВТ КАК ВТ"),
+        "Q_FUNC_OVER_PROTECTED"));
+    // a dropped table is gone
+    CHECK(HasReason(AnalyzeForTest(kPolicyAB,
+        "ВЫБРАТЬ Б.Сумма КАК Х ПОМЕСТИТЬ ВТ ИЗ Справочник.Б КАК Б; УНИЧТОЖИТЬ ВТ; ВЫБРАТЬ ВТ.Х КАК Х ИЗ ВТ КАК ВТ"),
+        "Q_RESOLVE_UNKNOWN_TEMP_TABLE"));
+}
+
+TEST(Origin, TempTableReadInLaterSubquery) {
+    // protected column of a temp table is the operand of IN against an open column
+    CHECK(HasReason(AnalyzeForTest(kPolicyAB,
+        "ВЫБРАТЬ А.Имя КАК Х ПОМЕСТИТЬ ВТ ИЗ Справочник.А КАК А; "
+        "ВЫБРАТЬ Б.Ссылка КАК С ИЗ Справочник.Б КАК Б ГДЕ Б.Сумма В (ВЫБРАТЬ ВТ.Х ИЗ ВТ КАК ВТ)"),
+        "Q_EQ_CLIENT_PARAM"));
+    // a temp table whose rows were chosen by a protected filter taints the subquery result
+    CHECK(HasReason(AnalyzeForTest(kPolicyAB,
+        "ВЫБРАТЬ А.Ссылка КАК Р ПОМЕСТИТЬ ВТ ИЗ Справочник.А КАК А ГДЕ А.Имя = &МСПТокен1; "
+        "ВЫБРАТЬ Б.Сумма КАК С ИЗ Справочник.Б КАК Б ГДЕ Б.СсылкаНаА В (ВЫБРАТЬ ВТ.Р ИЗ ВТ КАК ВТ)"),
+        "Q_COMPARE_PROTECTED"));
+    // an aggregate over such a temp table inside a subquery
+    CHECK(HasReason(AnalyzeForTest(kPolicyAB,
+        "ВЫБРАТЬ А.Ссылка КАК Р ПОМЕСТИТЬ ВТ ИЗ Справочник.А КАК А ГДЕ А.Имя = &МСПТокен1; "
+        "ВЫБРАТЬ Б.Сумма КАК С ИЗ Справочник.Б КАК Б ГДЕ Б.Сумма В (ВЫБРАТЬ КОЛИЧЕСТВО(*) ИЗ ВТ КАК ВТ)"),
+        "Q_AGGREGATE_ROWSET"));
+}
+
+TEST(Origin, TempTableReadInVirtualTableParameter) {
+    const std::string vt = "РегистрНакопления.Взаиморасчеты.Остатки";
+    // a protected-row temp table inside the condition slot taints the virtual table's row set
+    CHECK(HasReason(AnalyzeForTest(kPolicyVT,
+        "ВЫБРАТЬ А.Ссылка КАК Р ПОМЕСТИТЬ ВТ ИЗ Справочник.А КАК А ГДЕ А.Имя = &МСПТокен1; "
+        "ВЫБРАТЬ КОЛИЧЕСТВО(*) КАК К ИЗ " + vt + "(, Контрагент В (ВЫБРАТЬ ВТ.Р ИЗ ВТ КАК ВТ)) КАК О"),
+        "Q_AGGREGATE_ROWSET"));
+    // a protected column of a temp table in an EARLIER slot
+    CHECK(HasReason(AnalyzeForTest(kPolicyVT,
+        "ВЫБРАТЬ А.Имя КАК Х ПОМЕСТИТЬ ВТ ИЗ Справочник.А КАК А; "
+        "ВЫБРАТЬ О.СуммаОстаток КАК С ИЗ " + vt + "(Контрагент В (ВЫБРАТЬ ВТ.Х ИЗ ВТ КАК ВТ), ) КАК О"), "Q_VT_PARAM"));
+}
+
+TEST(Origin, UnionOfTempTables) {
+    CHECK_EQ(AnalyzeForTest(kPolicyAB,
+        "ВЫБРАТЬ А.Имя КАК Х ПОМЕСТИТЬ ВТ1 ИЗ Справочник.А КАК А; ВЫБРАТЬ \"q\" КАК Х ПОМЕСТИТЬ ВТ2; "
+        "ВЫБРАТЬ ВТ1.Х КАК Х ИЗ ВТ1 КАК ВТ1 ОБЪЕДИНИТЬ ВСЕ ВЫБРАТЬ ВТ2.Х ИЗ ВТ2 КАК ВТ2").columns.at(0).origin,
+        Origin::Mixed);
+    // two protected parts stay protected and safe
+    CHECK(AnalyzeForTest(kPolicyAB,
+        "ВЫБРАТЬ А.Имя КАК Х ПОМЕСТИТЬ ВТ1 ИЗ Справочник.А КАК А; ВЫБРАТЬ А.Код КАК Х ПОМЕСТИТЬ ВТ2 ИЗ Справочник.А КАК А; "
+        "ВЫБРАТЬ ВТ1.Х КАК Х ИЗ ВТ1 КАК ВТ1 ОБЪЕДИНИТЬ ВСЕ ВЫБРАТЬ ВТ2.Х ИЗ ВТ2 КАК ВТ2").verdict == Verdict::Safe);
+    // a union part with a protected filter taints the whole result for a later count
+    CHECK(HasReason(AnalyzeForTest(kPolicyAB,
+        "ВЫБРАТЬ Б.Сумма КАК К ПОМЕСТИТЬ ВТ ИЗ Справочник.Б КАК Б ОБЪЕДИНИТЬ ВСЕ "
+        "ВЫБРАТЬ Б2.Сумма ИЗ Справочник.Б КАК Б2 ВНУТРЕННЕЕ СОЕДИНЕНИЕ Справочник.А КАК А ПО Б2.СсылкаНаА = А.Ссылка "
+        "ГДЕ А.Имя = &МСПТокен1; ВЫБРАТЬ КОЛИЧЕСТВО(*) КАК К ИЗ ВТ КАК ВТ"), "Q_AGGREGATE_ROWSET"));
+}
+
+TEST(Origin, TempTableReferencesSurviveOnlyWhenSafe) {
+    // references carried through a temp table: the protected target field is a direct read
+    CHECK(AnalyzeForTest(kPolicyAB,
+        "ВЫБРАТЬ Б.СсылкаНаА КАК Р ПОМЕСТИТЬ ВТ ИЗ Справочник.Б КАК Б; ВЫБРАТЬ ВТ.Р.Имя КАК Н ИЗ ВТ КАК ВТ")
+        .verdict == Verdict::Safe);
+    // a function over it is still caught
+    CHECK(HasReason(AnalyzeForTest(kPolicyAB,
+        "ВЫБРАТЬ Б.СсылкаНаА КАК Р ПОМЕСТИТЬ ВТ ИЗ Справочник.Б КАК Б; "
+        "ВЫБРАТЬ ПОДСТРОКА(ВТ.Р.Имя,1,1) КАК Н ИЗ ВТ КАК ВТ"), "Q_FUNC_OVER_PROTECTED"));
+    // a union of a reference and a client parameter loses the targets: the dereference does not resolve
+    CHECK(!AnalyzeForTest(kPolicyAB,
+        "ВЫБРАТЬ Б.СсылкаНаА КАК Р ПОМЕСТИТЬ ВТ ИЗ Справочник.Б КАК Б ОБЪЕДИНИТЬ ВСЕ ВЫБРАТЬ &П; "
+        "ВЫБРАТЬ ВТ.Р.Имя КАК Н ИЗ ВТ КАК ВТ").reasons.empty());
+    // a grouped temp table hands its multiplicities on and drops the references
+    CHECK(!AnalyzeForTest(kPolicyAB,
+        "ВЫБРАТЬ А.Ссылка КАК Р ПОМЕСТИТЬ ВТ ИЗ Справочник.А КАК А СГРУППИРОВАТЬ ПО А.Имя, А.Ссылка; "
+        "ВЫБРАТЬ ВТ.Р.Имя КАК Н ИЗ ВТ КАК ВТ").reasons.empty());
+}
+
+TEST(Origin, DerivedTableInsideTempChain) {
+    CHECK(HasReason(AnalyzeForTest(kPolicyAB,
+        "ВЫБРАТЬ Х.К КАК К ПОМЕСТИТЬ ВТ ИЗ (ВЫБРАТЬ ПОДСТРОКА(А.Имя,1,1) КАК К ИЗ Справочник.А КАК А) КАК Х; "
+        "ВЫБРАТЬ ВТ.К КАК К ИЗ ВТ КАК ВТ"), "Q_FUNC_OVER_PROTECTED"));
 }

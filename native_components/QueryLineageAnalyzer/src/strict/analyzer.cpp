@@ -493,7 +493,7 @@ private:
 
     void JoinUnionPart(SelectOut& head, const SelectOut& part, const Pos& pos) {
         if (part.columns.size() != head.columns.size()) {
-            sink_.Issue(kResolveColumnMismatch, pos);
+            sink_.Issue(kResolveUnionArity, pos);
             for (Column& c : head.columns) {
                 c.origin = Origin::Unknown;
                 c.refs.clear();
