@@ -68,30 +68,22 @@ option(QUERY_LINEAGE_BUILD_TESTS "Build QueryLineageAnalyzer native tests" OFF)
 if(QUERY_LINEAGE_BUILD_TESTS)
     enable_testing()
 
-    add_executable(test_query_lineage
+    set(QLA_CORE_SOURCES
+        src/tokenizer.cpp src/parser.cpp src/lineage_resolver.cpp
+        src/schema_enricher.cpp src/json_utils.cpp src/component.cpp
+    )
+    set(QLA_TEST_SOURCES
         tests/test_main.cpp
-        src/tokenizer.cpp
-        src/parser.cpp
-        src/lineage_resolver.cpp
-        src/schema_enricher.cpp
-        src/json_utils.cpp
-        src/component.cpp
+        tests/test_harness.cpp
     )
-
+    add_executable(test_query_lineage ${QLA_TEST_SOURCES} ${QLA_CORE_SOURCES})
     target_include_directories(test_query_lineage PRIVATE
-        ${CMAKE_CURRENT_SOURCE_DIR}/src
-        ${CMAKE_CURRENT_SOURCE_DIR}/include
-    )
-
+        ${CMAKE_CURRENT_SOURCE_DIR}/src ${CMAKE_CURRENT_SOURCE_DIR}/include ${CMAKE_CURRENT_SOURCE_DIR}/tests)
+    target_compile_definitions(test_query_lineage PRIVATE
+        QLA_CORPUS_DIR="${CMAKE_CURRENT_SOURCE_DIR}/tests/corpus")
     if(WIN32)
-        target_compile_definitions(test_query_lineage PRIVATE
-            _WINDOWS
-            WIN32_LEAN_AND_MEAN
-            NOMINMAX
-            _CRT_SECURE_NO_WARNINGS
-        )
+        target_compile_definitions(test_query_lineage PRIVATE _WINDOWS WIN32_LEAN_AND_MEAN NOMINMAX _CRT_SECURE_NO_WARNINGS)
     endif()
-
     if(MSVC)
         target_compile_options(test_query_lineage PRIVATE /W3 /utf-8 /EHsc)
     else()
@@ -99,4 +91,8 @@ if(QUERY_LINEAGE_BUILD_TESTS)
     endif()
 
     add_test(NAME test_query_lineage COMMAND test_query_lineage)
+    set(QLA_TEST_SUITES Harness)
+    foreach(suite IN LISTS QLA_TEST_SUITES)
+        add_test(NAME ${suite} COMMAND test_query_lineage --suite ${suite})
+    endforeach()
 endif()
