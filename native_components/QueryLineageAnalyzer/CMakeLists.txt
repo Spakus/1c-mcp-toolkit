@@ -75,6 +75,7 @@ if(QUERY_LINEAGE_BUILD_TESTS)
     set(QLA_TEST_SOURCES
         tests/test_main.cpp
         tests/test_harness.cpp
+        tests/test_lineage.cpp
     )
     add_executable(test_query_lineage ${QLA_TEST_SOURCES} ${QLA_CORE_SOURCES})
     target_include_directories(test_query_lineage PRIVATE
@@ -91,7 +92,7 @@ if(QUERY_LINEAGE_BUILD_TESTS)
     endif()
 
     add_test(NAME test_query_lineage COMMAND test_query_lineage)
-    set(QLA_TEST_SUITES Harness)
+    set(QLA_TEST_SUITES Harness Lineage)
     foreach(suite IN LISTS QLA_TEST_SUITES)
         add_test(NAME ${suite} COMMAND test_query_lineage --suite ${suite})
     endforeach()
