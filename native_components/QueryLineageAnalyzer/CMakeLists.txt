@@ -41,6 +41,7 @@ add_library(${PROJECT_NAME} SHARED
     src/strict/analyzer.cpp
     src/strict/rules.cpp
     src/strict/check_query.cpp
+    src/bsl/bsl_tokenizer.cpp
 )
 
 target_include_directories(${PROJECT_NAME} PRIVATE
@@ -86,6 +87,7 @@ if(QUERY_LINEAGE_BUILD_TESTS)
         src/strict/canonical_printer.cpp src/strict/field_policy.cpp
         src/strict/origin.cpp src/strict/scope.cpp src/strict/analyzer.cpp src/strict/rules.cpp
         src/strict/check_query.cpp
+        src/bsl/bsl_tokenizer.cpp
     )
     set(QLA_TEST_SOURCES
         tests/test_main.cpp
@@ -97,6 +99,7 @@ if(QUERY_LINEAGE_BUILD_TESTS)
         tests/test_policy.cpp
         tests/test_origin.cpp
         tests/test_check_query.cpp
+        tests/test_bsl_tokenizer.cpp
     )
     add_executable(test_query_lineage ${QLA_TEST_SOURCES} ${QLA_CORE_SOURCES})
     target_include_directories(test_query_lineage PRIVATE
@@ -113,7 +116,7 @@ if(QUERY_LINEAGE_BUILD_TESTS)
     endif()
 
     add_test(NAME test_query_lineage COMMAND test_query_lineage)
-    set(QLA_TEST_SUITES Harness Lineage StrictTokenizer StrictParser Canonical Policy Origin CheckQuery)
+    set(QLA_TEST_SUITES Harness Lineage StrictTokenizer StrictParser Canonical Policy Origin CheckQuery BslTokenizer)
     foreach(suite IN LISTS QLA_TEST_SUITES)
         add_test(NAME ${suite} COMMAND test_query_lineage --suite ${suite})
     endforeach()
