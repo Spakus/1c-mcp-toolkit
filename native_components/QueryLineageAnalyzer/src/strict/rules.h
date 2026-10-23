@@ -11,9 +11,11 @@
 // It runs after name resolution and labelling, over the labels the analyzer recorded for every expression node.
 // Reason codes are fixed and public, carry no values, and point into the client's own text.
 //
-// Task 18 adds clause-specific and implicit channels (WHERE / JOIN / GROUP BY / HAVING taint, subquery taint,
-// aggregates over open fields with protected filters, virtual-table parameter conditions). Until then a virtual
-// table parameter that is anything but a constant, a client parameter or a plain date function is Q_VT_PARAM.
+// Implicit channels (Task 18): a select whose row set is filtered, joined or grouped by protected data
+// ("rows_protected") must not feed an aggregate (Q_AGGREGATE_ROWSET: a COUNT / SUM over open fields would expose
+// the cardinality of the protected condition), and a subquery with such a row set is tainted as a whole when it
+// is used as a value. Virtual-table parameters are labelled by the analyzer against the base table of the
+// register and checked with the condition rules; a protected slot that is not condition-shaped is Q_VT_PARAM.
 
 namespace lineage::strict {
 
@@ -21,7 +23,24 @@ namespace lineage::strict {
 struct LabelTable {
     std::map<const Expr*, FieldLabel> expr;                       // label of every walked expression
     std::map<const Select*, std::vector<Column>> select_columns;  // result columns of a select (after ОБЪЕДИНИТЬ)
+    std::map<const Select*, bool> rows_protected;    // the select's own row set depends on a protected condition
+    std::map<const Select*, bool> result_protected;  // ... or that of any ОБЪЕДИНИТЬ part (the whole result)
 };
+
+// True when a grouping item is also selected as is (same field path): the group key is then returned as a
+// protected value, and the group counts describe that value only. Any other protected grouping hides the key.
+inline bool GroupItemIsSelected(const Select& s, const Expr& g) {
+    if (g.kind != Expr::K::Field) return false;
+    for (const SelectItem& item : s.items) {
+        if (item.wildcard || !item.expr || item.expr->kind != Expr::K::Field) continue;
+        const Expr& x = *item.expr;
+        if (x.parts.size() != g.parts.size()) continue;
+        bool same = true;
+        for (size_t i = 0; same && i < x.parts.size(); ++i) same = FoldedKey(x.parts[i]) == FoldedKey(g.parts[i]);
+        if (same) return true;
+    }
+    return false;
+}
 
 // Appends rule and resolution reasons to `result` and sets the verdict.
 void ApplyRules(const Batch& batch, const FieldPolicy& policy, const LabelTable& labels, AnalysisResult& result);

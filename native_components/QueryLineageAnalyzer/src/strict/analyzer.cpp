@@ -15,13 +15,31 @@ constexpr int kMaxSelectDepth = 128;   // nesting of subqueries; the parser alre
 struct TempTable {
     std::vector<Column> columns;
     bool complete = true;
+    bool rows_protected = false;
 };
 
 struct SelectOut {
     std::vector<Column> columns;
     std::vector<Pos> positions;
     bool complete = true;
+    bool rows_protected = false;   // the row set (any ОБЪЕДИНИТЬ part included) depends on a protected condition
+    bool grouped = false;          // grouped by a protected key (even one returned as is) or РАЗЛИЧНЫЕ over protected
 };
+
+// A grouped / distinct select that is consumed (temp table, derived table, union part, subquery) hands its
+// multiplicities on: every column of it becomes derived protected information for the consumer. Only the
+// top-level result of a batch keeps the exemption for a group key that is returned as is.
+void Consume(SelectOut& r) {
+    if (!r.grouped) return;
+    for (Column& c : r.columns) {
+        if (c.origin != Origin::Unknown) c.origin = JoinOrigin(c.origin, Origin::ProtectedDerived);
+        c.refs.clear();
+    }
+}
+
+bool IsTaintedOrigin(Origin o) {
+    return o == Origin::ProtectedDirect || o == Origin::ProtectedDerived || o == Origin::Mixed;
+}
 
 // Result column names a single-part ORDER BY / TOTALS path may refer to, with the labels of those columns.
 struct AliasInfo {
@@ -85,8 +103,11 @@ private:
             return;
         }
         TempTable table;
-        table.columns = result.columns;
+        SelectOut consumed = result;
+        Consume(consumed);
+        table.columns = consumed.columns;
         table.complete = result.complete;
+        table.rows_protected = result.rows_protected;
         temps_[ScopeKey(head.into)] = std::move(table);   // re-creating a name replaces the old table
     }
 
@@ -111,6 +132,7 @@ private:
             case Source::K::Subquery: BuildSubquery(src, depth, b); break;
         }
         SetBindingNames(b, src.kind == Source::K::Subquery ? std::string() : src.name, src.alias);
+        if (src.kind == Source::K::VirtualTable) LabelVirtualTableParams(src, b, depth);
         return b;
     }
 
@@ -134,10 +156,11 @@ private:
         }
         b.columns = temp->columns;
         b.complete = temp->complete;
+        b.rows_protected = temp->rows_protected;
     }
 
     void BuildVirtualTable(const Source& src, Binding& b) {
-        // The parameters are conditions over the register's own fields; the rule engine checks them (Task 18).
+        // The parameters are labelled in LabelVirtualTableParams, once the binding has its names.
         b.kind = Binding::Kind::Table;
         b.table = src.name;
         b.known = src.name.find('.') != std::string::npos && !policy_.ResolveVirtualBase(src.name).empty();
@@ -155,8 +178,42 @@ private:
             return;
         }
         SelectOut r = AnalyzeSelect(*src.subquery, nullptr, depth + 1, false);   // a derived table sees no outer scope
+        Consume(r);
         b.columns = std::move(r.columns);
         b.complete = r.complete;
+        b.rows_protected = r.rows_protected;
+    }
+
+    // Parameters of a virtual table (period slots and a condition slot) are expressions over the fields of the
+    // register's base table; they are labelled in a scope made of that one binding and are checked by the rule
+    // engine like any condition. The slot position is not known here, so every slot gets the same treatment.
+    // A bare period name (a periodicity slot, e.g. МЕСЯЦ) is a constant unless the register has such a field.
+    // A parameter that reads other tables of the query is not resolvable here: Unknown, hence Confirm.
+    void LabelVirtualTableParams(const Source& src, Binding& b, int depth) {
+        Scope vt_scope;
+        vt_scope.bindings.push_back(b);
+        for (const ExprP& p : src.vt_params) {
+            if (!p) continue;
+            const bool period_slot = p->kind == Expr::K::Field && p->parts.size() == 1 && IsPeriodName(p->parts[0]) &&
+                                     policy_.Field(src.name, p->parts[0]) == nullptr;
+            if (period_slot) labels_.expr[p.get()] = Plain(Origin::Open);
+            else Label(*p, vt_scope, depth, nullptr);
+            if (SubtreeTainted(p)) b.rows_protected = true;
+        }
+    }
+
+    bool SubtreeTainted(const ExprP& e) const {
+        if (!e) return false;
+        const auto it = labels_.expr.find(e.get());
+        if (it != labels_.expr.end() && IsTaintedOrigin(it->second.origin)) return true;
+        for (const ExprP& a : e->args) {
+            if (SubtreeTainted(a)) return true;
+        }
+        if (e->subquery) {
+            const auto sub = labels_.result_protected.find(e->subquery.get());
+            if (sub == labels_.result_protected.end() || sub->second) return true;
+        }
+        return false;
     }
 
     // ---- expressions ----
@@ -236,17 +293,21 @@ private:
             else out.push_back(FieldLabel());   // a null operand is malformed: Unknown
         }
         if (e.subquery) {
-            const SelectOut sub = AnalyzeSelect(*e.subquery, &scope, depth + 1, false);
+            SelectOut sub = AnalyzeSelect(*e.subquery, &scope, depth + 1, false);
+            Consume(sub);
             out.push_back(Plain(SubqueryOrigin(sub)));
         }
         return out;
     }
 
-    // Join of every column the subquery returns; Unknown when the column list cannot be enumerated.
+    // Join of every column the subquery returns; Unknown when the column list cannot be enumerated. A subquery
+    // whose rows were chosen by a protected condition returns derived protected information even through open
+    // columns (the presence of a row is the answer), so it is joined with ProtectedDerived.
     static Origin SubqueryOrigin(const SelectOut& sub) {
         if (!sub.complete || sub.columns.empty()) return Origin::Unknown;
         Origin o = sub.columns[0].origin;
         for (size_t i = 1; i < sub.columns.size(); ++i) o = JoinOrigin(o, sub.columns[i].origin);
+        if (sub.rows_protected && o != Origin::Unknown) o = JoinOrigin(o, Origin::ProtectedDerived);
         return o;
     }
 
@@ -379,6 +440,37 @@ private:
         }
     }
 
+    // The row set is chosen, joined or grouped by protected data: a source that already is (temp table, derived
+    // table, virtual table), a tainted ON / ГДЕ / ИМЕЮЩИЕ, or a tainted grouping whose key is not returned as is.
+    bool RowsProtected(const Select& s, const Scope& scope) const {
+        for (const Binding& b : scope.bindings) {
+            if (b.rows_protected) return true;
+        }
+        for (const std::vector<Join>& joins : s.joins) {
+            for (const Join& j : joins) {
+                if (SubtreeTainted(j.on)) return true;
+            }
+        }
+        if (SubtreeTainted(s.where) || SubtreeTainted(s.having)) return true;
+        for (const ExprP& g : s.group_by) {
+            if (SubtreeTainted(g) && !(g && GroupItemIsSelected(s, *g))) return true;
+        }
+        return false;
+    }
+
+    // Any tainted grouping key, or РАЗЛИЧНЫЕ over a tainted output column: the rows left are the distinct
+    // protected values, so a consumer that counts them learns how many there are.
+    bool GroupedByProtected(const Select& s, const SelectOut& out) const {
+        for (const ExprP& g : s.group_by) {
+            if (SubtreeTainted(g)) return true;
+        }
+        if (!s.distinct) return false;
+        for (const Column& c : out.columns) {
+            if (IsTaintedOrigin(c.origin)) return true;
+        }
+        return false;
+    }
+
     SelectOut LabelItems(const Select& head, const Scope& scope, int depth, const std::vector<std::string>& names,
                          bool names_ok) {
         SelectOut out;
@@ -440,6 +532,10 @@ private:
         WalkConditions(head, scope, depth);
         SelectOut out = LabelItems(head, scope, depth, names, names_ok);
         if (!names_ok) out.complete = false;
+        const bool own_rows = RowsProtected(head, scope);
+        out.grouped = GroupedByProtected(head, out);
+        out.rows_protected = own_rows || out.grouped;
+        labels_.rows_protected[&head] = own_rows;
 
         for (const Select::UnionPart& u : head.unions) {
             if (!u.select) {
@@ -447,9 +543,12 @@ private:
                 out.complete = false;
                 continue;
             }
-            const SelectOut part = AnalyzeSelect(*u.select, parent, depth + 1, false);
+            SelectOut part = AnalyzeSelect(*u.select, parent, depth + 1, false);
+            Consume(part);
             JoinUnionPart(out, part, u.select->pos);
+            out.rows_protected = out.rows_protected || part.rows_protected;
         }
+        labels_.result_protected[&head] = out.rows_protected;
         // ORDER BY / TOTALS belong to the whole union: their aliases carry the joined labels of the result columns.
         AliasInfo alias_info;
         alias_info.names = &names;

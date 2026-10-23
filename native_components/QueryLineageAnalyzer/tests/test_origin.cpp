@@ -589,7 +589,7 @@ TEST(Origin, LegitimateShapesAreSafe) {
     CHECK(AnalyzeForTest(kPolicyAB,
         "ВЫБРАТЬ А.Имя КАК Нм, КОЛИЧЕСТВО(*) КАК Н ИЗ Справочник.А КАК А СГРУППИРОВАТЬ ПО А.Имя").verdict == Verdict::Safe);
     CHECK(AnalyzeForTest(kPolicyAB,
-        "ВЫБРАТЬ КОЛИЧЕСТВО(РАЗЛИЧНЫЕ А.Имя) КАК Н ИЗ Справочник.А КАК А").verdict == Verdict::Safe);
+        "ВЫБРАТЬ КОЛИЧЕСТВО(РАЗЛИЧНЫЕ Б.Код) КАК Н ИЗ Справочник.Б КАК Б").verdict == Verdict::Safe);
     CHECK(AnalyzeForTest(kPolicyAB,
         "ВЫБРАТЬ А.Имя КАК Нм, Б.Сумма КАК С ИЗ Справочник.А КАК А ВНУТРЕННЕЕ СОЕДИНЕНИЕ Справочник.Б КАК Б "
         "ПО Б.СсылкаНаА = А.Ссылка").verdict == Verdict::Safe);
@@ -614,4 +614,201 @@ TEST(Origin, OrdinalOrderingAndNonLastResultSets) {
     // ... but a ПОМЕСТИТЬ statement is not a result set
     CHECK(AnalyzeForTest(kPolicyAB,
         "ВЫБРАТЬ Б.Сумма КАК Х ПОМЕСТИТЬ ВТ ИЗ Справочник.Б КАК Б; ВЫБРАТЬ ВТ.Х КАК Y ИЗ ВТ КАК ВТ").verdict == Verdict::Safe);
+}
+
+// ---- Task 18: clause-specific rules and implicit-condition channels ----
+
+TEST(Origin, ConditionChannels) {
+    // join ON comparing a protected field with a literal
+    CHECK(HasReason(AnalyzeForTest(kPolicyAB,
+        "ВЫБРАТЬ Б.Сумма КАК С ИЗ Справочник.Б КАК Б ВНУТРЕННЕЕ СОЕДИНЕНИЕ Справочник.А КАК А "
+        "ПО Б.СсылкаНаА = А.Ссылка И А.Имя = \"x\""), "Q_EQ_LITERAL"));
+    // HAVING with a function over a protected value
+    CHECK(HasReason(AnalyzeForTest(kPolicyAB,
+        "ВЫБРАТЬ А.Имя КАК Нм ИЗ Справочник.А КАК А СГРУППИРОВАТЬ ПО А.Имя "
+        "ИМЕЮЩИЕ МАКСИМУМ(ПОДСТРОКА(А.Имя, 1, 1)) = \"x\""), "Q_FUNC_OVER_PROTECTED"));
+    // a virtual table condition over a dereferenced protected field
+    CHECK(HasReason(AnalyzeForTest(kPolicyVT,
+        "ВЫБРАТЬ О.СуммаОстаток КАК С ИЗ РегистрНакопления.Взаиморасчеты.Остатки(, Контрагент.Имя ПОДОБНО \"А%\") КАК О"),
+        "Q_LIKE_PROTECTED"));
+    // ВЫБОР in a condition produces predicate bits
+    CHECK(HasReason(AnalyzeForTest(kPolicyAB,
+        "ВЫБРАТЬ А.Ссылка КАК С ИЗ Справочник.А КАК А "
+        "ГДЕ ВЫБОР КОГДА А.Имя = &МСПТокен1 ТОГДА 1 ИНАЧЕ 0 КОНЕЦ = 1"), "Q_FUNC_OVER_PROTECTED"));
+    // IN list of literals
+    CHECK(HasReason(AnalyzeForTest(kPolicyAB,
+        "ВЫБРАТЬ А.Ссылка КАК С ИЗ Справочник.А КАК А ГДЕ А.Имя В (\"a\", \"b\")"), "Q_EQ_LITERAL"));
+}
+
+TEST(Origin, SubqueryRowSetTaintsItsValue) {
+    // an open column of a subquery whose rows were chosen by a protected condition is not open
+    auto lit = AnalyzeForTest(kPolicyAB,
+        "ВЫБРАТЬ Б.Ссылка КАК С ИЗ Справочник.Б КАК Б ГДЕ Б.Сумма В "
+        "(ВЫБРАТЬ Б2.Сумма ИЗ Справочник.Б КАК Б2 ГДЕ Б2.СсылкаНаА.Имя = \"x\")");
+    CHECK(HasReason(lit, "Q_EQ_LITERAL"));
+    auto tok = AnalyzeForTest(kPolicyAB,
+        "ВЫБРАТЬ Б.Ссылка КАК С ИЗ Справочник.Б КАК Б ГДЕ Б.Сумма В "
+        "(ВЫБРАТЬ Б2.Сумма ИЗ Справочник.Б КАК Б2 ГДЕ Б2.СсылкаНаА.Имя = &МСПТокен1)");
+    CHECK(tok.verdict == Verdict::Confirm);
+    CHECK(HasReason(tok, "Q_COMPARE_PROTECTED"));
+    // join and grouping conditions count too
+    CHECK(AnalyzeForTest(kPolicyAB,
+        "ВЫБРАТЬ Б.Ссылка КАК С ИЗ Справочник.Б КАК Б ГДЕ Б.Сумма В (ВЫБРАТЬ Б2.Сумма ИЗ Справочник.Б КАК Б2 "
+        "ВНУТРЕННЕЕ СОЕДИНЕНИЕ Справочник.А КАК А ПО Б2.СсылкаНаА = А.Ссылка И А.Имя = &МСПТокен1)").verdict ==
+        Verdict::Confirm);
+    CHECK(AnalyzeForTest(kPolicyAB,
+        "ВЫБРАТЬ Б.Ссылка КАК С ИЗ Справочник.Б КАК Б ГДЕ Б.Сумма В "
+        "(ВЫБРАТЬ Б2.Сумма ИЗ Справочник.Б КАК Б2 СГРУППИРОВАТЬ ПО Б2.Сумма, Б2.СсылкаНаА.Имя)").verdict ==
+        Verdict::Confirm);
+    // the same subquery with an open condition stays safe
+    CHECK(AnalyzeForTest(kPolicyAB,
+        "ВЫБРАТЬ Б.Ссылка КАК С ИЗ Справочник.Б КАК Б ГДЕ Б.Сумма В "
+        "(ВЫБРАТЬ Б2.Сумма ИЗ Справочник.Б КАК Б2 ГДЕ Б2.Сумма > 1)").verdict == Verdict::Safe);
+    // a value subquery inside a select list
+    CHECK(AnalyzeForTest(kPolicyAB,
+        "ВЫБРАТЬ Б.Сумма В (ВЫБРАТЬ Б2.Сумма ИЗ Справочник.Б КАК Б2 ГДЕ Б2.СсылкаНаА.Имя = &МСПТокен1) КАК Х "
+        "ИЗ Справочник.Б КАК Б").verdict == Verdict::Confirm);
+}
+
+TEST(Origin, AggregatesOverProtectedRowSetsNeedConfirmation) {
+    CHECK(HasReason(AnalyzeForTest(kPolicyAB,
+        "ВЫБРАТЬ КОЛИЧЕСТВО(*) КАК Н ИЗ Справочник.А КАК А ГДЕ А.Имя = &МСПТокен1"), "Q_AGGREGATE_ROWSET"));
+    CHECK(HasReason(AnalyzeForTest(kPolicyAB,
+        "ВЫБРАТЬ СУММА(Б.Сумма) КАК С ИЗ Справочник.Б КАК Б ГДЕ Б.СсылкаНаА.Имя = &МСПТокен1"), "Q_AGGREGATE_ROWSET"));
+    // a protected join condition
+    CHECK(HasReason(AnalyzeForTest(kPolicyAB,
+        "ВЫБРАТЬ СУММА(Б.Сумма) КАК С ИЗ Справочник.Б КАК Б ВНУТРЕННЕЕ СОЕДИНЕНИЕ Справочник.А КАК А "
+        "ПО Б.СсылкаНаА = А.Ссылка И А.Имя = &МСПТокен1"), "Q_AGGREGATE_ROWSET"));
+    // a protected grouping that is not returned as is
+    auto grp = AnalyzeForTest(kPolicyAB,
+        "ВЫБРАТЬ КОЛИЧЕСТВО(*) КАК Н ИЗ Справочник.А КАК А СГРУППИРОВАТЬ ПО А.Имя");
+    CHECK(HasReason(grp, "Q_GROUP_PROTECTED"));
+    CHECK(HasReason(grp, "Q_AGGREGATE_ROWSET"));
+    // a HAVING aggregate of such a row set
+    CHECK(HasReason(AnalyzeForTest(kPolicyAB,
+        "ВЫБРАТЬ Б.СсылкаНаА КАК К ИЗ Справочник.Б КАК Б ГДЕ Б.СсылкаНаА.Имя = &МСПТокен1 "
+        "СГРУППИРОВАТЬ ПО Б.СсылкаНаА ИМЕЮЩИЕ КОЛИЧЕСТВО(*) > 1"), "Q_AGGREGATE_ROWSET"));
+    // a protected condition in an inner query reaches the outer aggregate through a derived table / temp table
+    CHECK(HasReason(AnalyzeForTest(kPolicyAB,
+        "ВЫБРАТЬ КОЛИЧЕСТВО(*) КАК Н ИЗ (ВЫБРАТЬ Б.Сумма КАК С ИЗ Справочник.Б КАК Б "
+        "ГДЕ Б.СсылкаНаА.Имя = &МСПТокен1) КАК Х"), "Q_AGGREGATE_ROWSET"));
+    CHECK(HasReason(AnalyzeForTest(kPolicyAB,
+        "ВЫБРАТЬ Б.Сумма КАК С ПОМЕСТИТЬ ВТ ИЗ Справочник.Б КАК Б ГДЕ Б.СсылкаНаА.Имя = &МСПТокен1; "
+        "ВЫБРАТЬ СУММА(ВТ.С) КАК С ИЗ ВТ КАК ВТ"), "Q_AGGREGATE_ROWSET"));
+    // an aggregate inside a subquery with a protected condition
+    CHECK(HasReason(AnalyzeForTest(kPolicyAB,
+        "ВЫБРАТЬ Б.Ссылка КАК С ИЗ Справочник.Б КАК Б ГДЕ Б.Сумма В "
+        "(ВЫБРАТЬ СУММА(Б2.Сумма) ИЗ Справочник.Б КАК Б2 ГДЕ Б2.СсылкаНаА.Имя = &МСПТокен1)"), "Q_AGGREGATE_ROWSET"));
+    // a protected condition in one part of a union
+    CHECK(HasReason(AnalyzeForTest(kPolicyAB,
+        "ВЫБРАТЬ Б.Сумма КАК С ИЗ Справочник.Б КАК Б ГДЕ Б.СсылкаНаА.Имя = &МСПТокен1 "
+        "ОБЪЕДИНИТЬ ВСЕ ВЫБРАТЬ СУММА(Б3.Сумма) ИЗ Справочник.Б КАК Б3 ГДЕ Б3.СсылкаНаА.Имя = &МСПТокен1"),
+        "Q_AGGREGATE_ROWSET"));
+    // controls: aggregates over open row sets, or grouped by the returned protected key, stay safe
+    CHECK(AnalyzeForTest(kPolicyAB,
+        "ВЫБРАТЬ КОЛИЧЕСТВО(*) КАК Н, СУММА(Б.Сумма) КАК С ИЗ Справочник.Б КАК Б ГДЕ Б.Сумма > 1").verdict ==
+        Verdict::Safe);
+    CHECK(AnalyzeForTest(kPolicyAB,
+        "ВЫБРАТЬ А.Имя КАК Нм, КОЛИЧЕСТВО(*) КАК Н ИЗ Справочник.А КАК А СГРУППИРОВАТЬ ПО А.Имя").verdict ==
+        Verdict::Safe);
+    // a protected condition without an aggregate is the documented token equality
+    CHECK(AnalyzeForTest(kPolicyAB,
+        "ВЫБРАТЬ Б.Сумма КАК С ИЗ Справочник.Б КАК Б ГДЕ Б.СсылкаНаА.Имя = &МСПТокен1").verdict == Verdict::Safe);
+}
+
+TEST(Origin, VirtualTableParametersAreLabelledAgainstTheBaseTable) {
+    const std::string vt = "РегистрНакопления.Взаиморасчеты.Остатки";
+    // client period, open condition, periodicity word
+    CHECK(AnalyzeForTest(kPolicyVT,
+        "ВЫБРАТЬ О.СуммаОстаток КАК С ИЗ " + vt + "(&П, Контрагент = &П) КАК О").verdict == Verdict::Safe);
+    CHECK(AnalyzeForTest(kPolicyVT,
+        "ВЫБРАТЬ О.СуммаОстаток КАК С ИЗ " + vt + "(НАЧАЛОПЕРИОДА(&П, МЕСЯЦ), ) КАК О").verdict == Verdict::Safe);
+    CHECK(AnalyzeForTest(kPolicyVT,
+        "ВЫБРАТЬ О.СуммаОстаток КАК С ИЗ " + vt + "(, КВАРТАЛ, Контрагент = &П) КАК О").verdict == Verdict::Safe);
+    // the token equality on a dereferenced protected field is allowed; the row set is then protected
+    CHECK(AnalyzeForTest(kPolicyVT,
+        "ВЫБРАТЬ О.СуммаОстаток КАК С ИЗ " + vt + "(, Контрагент.Имя = &МСПТокен1) КАК О").verdict == Verdict::Safe);
+    CHECK(HasReason(AnalyzeForTest(kPolicyVT,
+        "ВЫБРАТЬ СУММА(О.СуммаОстаток) КАК С ИЗ " + vt + "(, Контрагент.Имя = &МСПТокен1) КАК О"),
+        "Q_AGGREGATE_ROWSET"));
+    // literal / client-parameter equality, ordering, function over protected
+    CHECK(HasReason(AnalyzeForTest(kPolicyVT,
+        "ВЫБРАТЬ О.СуммаОстаток КАК С ИЗ " + vt + "(, Контрагент.Имя = \"x\") КАК О"), "Q_EQ_LITERAL"));
+    CHECK(HasReason(AnalyzeForTest(kPolicyVT,
+        "ВЫБРАТЬ О.СуммаОстаток КАК С ИЗ " + vt + "(, Комментарий = &П) КАК О"), "Q_EQ_CLIENT_PARAM"));
+    CHECK(HasReason(AnalyzeForTest(kPolicyVT,
+        "ВЫБРАТЬ О.СуммаОстаток КАК С ИЗ " + vt + "(, Контрагент.Имя > \"a\") КАК О"), "Q_COMPARE_PROTECTED"));
+    CHECK(HasReason(AnalyzeForTest(kPolicyVT,
+        "ВЫБРАТЬ О.СуммаОстаток КАК С ИЗ " + vt + "(, ПОДСТРОКА(Комментарий, 1, 1) = &П) КАК О"),
+        "Q_FUNC_OVER_PROTECTED"));
+    // a subquery inside a parameter is walked with its own rules
+    CHECK(HasReason(AnalyzeForTest(kPolicyVT,
+        "ВЫБРАТЬ О.СуммаОстаток КАК С ИЗ " + vt + "(, Контрагент В (ВЫБРАТЬ А.Ссылка ИЗ Справочник.А КАК А "
+        "ГДЕ А.Имя = \"x\")) КАК О"), "Q_EQ_LITERAL"));
+    // a protected value that is not a condition
+    CHECK(HasReason(AnalyzeForTest(kPolicyVT,
+        "ВЫБРАТЬ О.СуммаОстаток КАК С ИЗ " + vt + "(&МСПТокен1) КАК О"), "Q_VT_PARAM"));
+    CHECK(HasReason(AnalyzeForTest(kPolicyVT,
+        "ВЫБРАТЬ О.СуммаОстаток КАК С ИЗ " + vt + "(, Комментарий) КАК О"), "Q_VT_PARAM"));
+    // fail closed: unknown field or parameter, a field of another source, an unknown virtual table
+    CHECK(AnalyzeForTest(kPolicyVT,
+        "ВЫБРАТЬ О.СуммаОстаток КАК С ИЗ " + vt + "(, Нет = &П) КАК О").verdict == Verdict::Confirm);
+    CHECK(AnalyzeForTest(kPolicyVT,
+        "ВЫБРАТЬ О.СуммаОстаток КАК С ИЗ " + vt + "(, Контрагент = &Нет) КАК О").verdict == Verdict::Confirm);
+    CHECK(AnalyzeForTest(kPolicyVT,
+        "ВЫБРАТЬ О.СуммаОстаток КАК С ИЗ Справочник.Б КАК Б ВНУТРЕННЕЕ СОЕДИНЕНИЕ " + vt +
+        "(, Контрагент = Б.СсылкаНаА) КАК О ПО ИСТИНА").verdict == Verdict::Confirm);
+    CHECK(AnalyzeForTest(kPolicyVT,
+        "ВЫБРАТЬ О.Х КАК С ИЗ РегистрНакопления.Нет.Остатки(, Х = &П) КАК О").verdict == Verdict::Confirm);
+}
+
+TEST(Origin, UnlistedFieldsFailClosed) {
+    // the policy must list every field of every table: a name it lacks never resolves to anything open
+    auto r = AnalyzeForTest(kPolicyAB, "ВЫБРАТЬ Б.Сумма КАК С ИЗ Справочник.Б КАК Б ГДЕ Б.Скрытое = &П");
+    CHECK(r.verdict == Verdict::Confirm);
+    CHECK(HasIssue(r, kResolveUnknownField));
+    CHECK(AnalyzeForTest(kPolicyAB,
+        "ВЫБРАТЬ Б.Ссылка КАК С ИЗ Справочник.Б КАК Б ГДЕ Б.Сумма В (ВЫБРАТЬ А.Скрытое ИЗ Справочник.А КАК А)").verdict ==
+        Verdict::Confirm);
+}
+
+TEST(Origin, GroupingAndDistinctHandMultiplicitiesToConsumers) {
+    const char* kGrouped = "ВЫБРАТЬ А.Имя КАК Н, КОЛИЧЕСТВО(*) КАК К ИЗ Справочник.А КАК А СГРУППИРОВАТЬ ПО А.Имя";
+    // the top-level result keeps the exemption
+    CHECK(AnalyzeForTest(kPolicyAB, kGrouped).verdict == Verdict::Safe);
+    // consumed through a derived table, a temp table, a union part, a subquery
+    CHECK(AnalyzeForTest(kPolicyAB, std::string("ВЫБРАТЬ Х.К КАК К ИЗ (") + kGrouped + ") КАК Х").verdict ==
+          Verdict::Confirm);
+    CHECK(AnalyzeForTest(kPolicyAB, std::string(kGrouped).insert(
+          std::string(kGrouped).find(" ИЗ "), " ПОМЕСТИТЬ ВТ") + "; ВЫБРАТЬ ВТ.К КАК К ИЗ ВТ КАК ВТ").verdict ==
+          Verdict::Confirm);
+    CHECK(AnalyzeForTest(kPolicyAB,
+        "ВЫБРАТЬ Х.Н КАК Н ИЗ (" + std::string(kGrouped) + ") КАК Х СГРУППИРОВАТЬ ПО Х.Н ИМЕЮЩИЕ Х.К > 1")
+        .verdict == Verdict::Confirm);
+    CHECK(AnalyzeForTest(kPolicyAB,
+        "ВЫБРАТЬ Б.Сумма КАК К ИЗ Справочник.Б КАК Б ОБЪЕДИНИТЬ ВСЕ ВЫБРАТЬ КОЛИЧЕСТВО(*) ИЗ Справочник.А КАК А "
+        "СГРУППИРОВАТЬ ПО А.Имя").verdict == Verdict::Confirm);
+    CHECK(AnalyzeForTest(kPolicyAB,
+        "ВЫБРАТЬ Б.Ссылка КАК С ИЗ Справочник.Б КАК Б ГДЕ Б.Сумма В (ВЫБРАТЬ КОЛИЧЕСТВО(*) ИЗ Справочник.А КАК А "
+        "СГРУППИРОВАТЬ ПО А.Имя)").verdict == Verdict::Confirm);
+    // РАЗЛИЧНЫЕ over a protected column
+    CHECK(HasReason(AnalyzeForTest(kPolicyAB,
+        "ВЫБРАТЬ РАЗЛИЧНЫЕ А.Имя КАК Н ПОМЕСТИТЬ ВТ ИЗ Справочник.А КАК А; ВЫБРАТЬ КОЛИЧЕСТВО(*) КАК К ИЗ ВТ КАК ВТ"),
+        "Q_AGGREGATE_ROWSET"));
+    CHECK(HasReason(AnalyzeForTest(kPolicyAB,
+        "ВЫБРАТЬ КОЛИЧЕСТВО(РАЗЛИЧНЫЕ А.Имя) КАК К ИЗ Справочник.А КАК А"), "Q_AGGREGATE_ROWSET"));
+    CHECK(HasReason(AnalyzeForTest(kPolicyAB,
+        "ВЫБРАТЬ КОЛИЧЕСТВО(А.Имя) КАК К ИЗ Справочник.А КАК А"), "Q_AGGREGATE_ROWSET"));
+    // top-level РАЗЛИЧНЫЕ over an open column is untouched
+    CHECK(AnalyzeForTest(kPolicyAB,
+        "ВЫБРАТЬ РАЗЛИЧНЫЕ Б.Сумма КАК С ИЗ Справочник.Б КАК Б").verdict == Verdict::Safe);
+}
+
+TEST(Origin, VirtualTableEarlierSlotsMayNotBeProtected) {
+    const std::string vt = "РегистрНакопления.Взаиморасчеты.Остатки";
+    CHECK(HasReason(AnalyzeForTest(kPolicyVT,
+        "ВЫБРАТЬ О.СуммаОстаток КАК С ИЗ " + vt + "(Контрагент.Имя = &МСПТокен1, Контрагент = &П) КАК О"),
+        "Q_VT_PARAM"));
+    CHECK(HasReason(AnalyzeForTest(kPolicyVT,
+        "ВЫБРАТЬ О.СуммаОстаток КАК С ИЗ " + vt + "(, Контрагент.Имя = &МСПТокен1, ) КАК О"), "Q_VT_PARAM"));
 }

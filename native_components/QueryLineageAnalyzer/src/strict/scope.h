@@ -45,6 +45,7 @@ struct Binding {
     std::string table;                  // Table: source name as written (looked up through the policy)
     bool known = true;                  // false: table/temp table not usable, every lookup is Unknown
     bool complete = true;               // false: the column list cannot be enumerated (wildcard in the producer)
+    bool rows_protected = false;        // the row set was filtered / joined / grouped by protected data
     std::vector<std::vector<std::string>> name_paths;   // normalized segment keys the binding can be addressed by
     std::vector<Column> columns;        // Temp / Subquery
 };

@@ -32,6 +32,17 @@
 //  (d) virtual-table parameters are NOT labelled by the analyzer; rules.cpp CheckVtParam is syntactic only.
 //      They must be labelled in a scope over the register's base table and checked with the Condition rules.
 //  (e) LabelTable needs a per-select "row set filtered / joined / grouped by protected" flag, consumed by (b).
+// Deliberate decisions (Task 18):
+//  (f) protected = protected equality that returns rows (self-joins, cross-field А.Имя = А.Код) stays Safe: the
+//      main token map is keyed by value, so equal values already show equal tokens. Revisit if Task 50
+//      introduces per-field token spaces.
+//  (g) filters equivalent to a token equality (НЕ x = tok, x В (tok), OR with open predicates, LEFT JOIN on a
+//      token) stay Safe: the client holds the token. <> is Confirm (conservative, inconsistent but harmless).
+//  (h) grouping by protected data, or РАЗЛИЧНЫЕ over a protected column, is exempt only in the top-level result
+//      (the key is returned as is). A select that is consumed (temp table, derived table, union part,
+//      subquery) hands its multiplicities on: its columns become derived protected and its row set protected.
+//  (i) virtual-table slot meaning per kind is not derived: only the LAST slot may hold protected data, as a
+//      condition; a tainted earlier slot is Q_VT_PARAM.
 // Notes for Tasks 46/50: protected equality is allowed between ANY two protected values, e.g. a token of field X
 //  against field Y, or А.Имя = А.Код. Closing it needs a field-origin id on protected labels and token records.
 //

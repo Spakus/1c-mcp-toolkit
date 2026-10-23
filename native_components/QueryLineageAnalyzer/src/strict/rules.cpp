@@ -1,6 +1,7 @@
 #include "strict/rules.h"
 
 #include <string>
+#include <vector>
 
 namespace lineage::strict {
 
@@ -74,7 +75,15 @@ private:
         if (it == labels_.select_columns.end() || it->second.empty()) return Origin::Unknown;
         Origin o = it->second[0].origin;
         for (size_t i = 1; i < it->second.size(); ++i) o = JoinOrigin(o, it->second[i].origin);
+        if (o == Origin::Unknown) return o;
+        const auto rows = labels_.result_protected.find(&s);
+        if (rows == labels_.result_protected.end() || rows->second) o = JoinOrigin(o, Origin::ProtectedDerived);
         return o;
+    }
+
+    bool FlagOf(const std::map<const Select*, bool>& flags, const Select& s) const {
+        const auto it = flags.find(&s);
+        return it == flags.end() || it->second;   // unrecorded: fail closed
     }
 
     // ---- output and resolution ----
@@ -130,46 +139,74 @@ private:
     void CheckSource(const Source& src) {
         if (src.kind == Source::K::Subquery && src.subquery) CheckSelect(*src.subquery);
         if (src.kind != Source::K::VirtualTable) return;
-        for (const ExprP& p : src.vt_params) {
-            if (p) CheckVtParam(*p);
+        // The slot meaning per kind of virtual table (period, boundary, periodicity, condition) is not derivable
+        // here, so fail closed: only the LAST slot (the condition of Остатки / Обороты / Срез*) may hold
+        // protected data, and only as a condition; any tainted earlier slot is Q_VT_PARAM.
+        for (size_t i = 0; i < src.vt_params.size(); ++i) {
+            const ExprP& p = src.vt_params[i];
+            if (!p) continue;   // an empty slot is normal
+            Walk(*p, Ctx::VtParam, false);
+            const bool last = i + 1 == src.vt_params.size();
+            if (TaintedExpr(p) && (!last || !ConditionShaped(*p))) Add("Q_VT_PARAM", p->pos);
         }
     }
 
-    // Task 18 resolves these against the base table and applies the condition rules. Until then only a constant,
-    // a client parameter or a plain date function over those is accepted.
-    void CheckVtParam(const Expr& e) {
+    // A slot may hold a protected value only as part of a condition over the register's fields.
+    static bool ConditionShaped(const Expr& e) {
         switch (e.kind) {
-            case Expr::K::StringLit:
-            case Expr::K::NumberLit:
-            case Expr::K::BoolLit:
-            case Expr::K::NullLit:
-            case Expr::K::UndefinedLit:
-            case Expr::K::ValueFn:
-            case Expr::K::TypeFn: return;
-            case Expr::K::Param:
-                if (policy_.OriginOfParam(e.text) != ParamOrigin::Client) Add("Q_VT_PARAM", e.pos);
-                return;
-            case Expr::K::Unary:
-            case Expr::K::Binary: break;
-            case Expr::K::Call:
-                if (ClassifyCall(e.text) != CallClass::Plain) {
-                    Add("Q_VT_PARAM", e.pos);
-                    return;
-                }
-                break;
-            default: Add("Q_VT_PARAM", e.pos); return;
+            case Expr::K::Binary: return e.text == "=" || IsComparison(e.text) || IsLogicalOp(e.text);
+            case Expr::K::Unary: return e.text == "НЕ" || e.text == "NOT";
+            case Expr::K::InList:
+            case Expr::K::InSubquery:
+            case Expr::K::InHierarchy:
+            case Expr::K::Between:
+            case Expr::K::Like:
+            case Expr::K::IsNullTest:
+            case Expr::K::RefsTest: return true;
+            default: return false;
         }
-        const int period = e.kind == Expr::K::Call ? PeriodArgIndex(e.text) : -1;
-        for (size_t i = 0; i < e.args.size(); ++i) {
-            const ExprP& a = e.args[i];
-            if (!a) {
-                Add("Q_VT_PARAM", e.pos);
-            } else if (static_cast<int>(i) == period && a->kind == Expr::K::Field && a->parts.size() == 1 &&
-                       IsPeriodName(a->parts[0])) {
-                continue;
-            } else {
-                CheckVtParam(*a);
-            }
+    }
+
+    // Aggregates of this select (not those of its subqueries, which have their own row sets).
+    void CollectAggregates(const Expr& e, std::vector<const Expr*>& out) const {
+        if (e.kind == Expr::K::Call) {
+            const CallClass c = ClassifyCall(e.text);
+            if (c == CallClass::Count || c == CallClass::Sum || c == CallClass::MinMax) out.push_back(&e);
+        }
+        for (const ExprP& a : e.args) {
+            if (a) CollectAggregates(*a, out);
+        }
+    }
+
+    // A COUNT / SUM / MIN / MAX over a row set chosen by protected data reveals the cardinality of that choice.
+    void CheckAggregateRows(const Select& s) {
+        const bool own = FlagOf(labels_.rows_protected, s);
+        const bool whole = FlagOf(labels_.result_protected, s);
+        std::vector<const Expr*> own_aggs;
+        std::vector<const Expr*> other_aggs;
+        for (const SelectItem& item : s.items) {
+            if (item.expr) CollectAggregates(*item.expr, own_aggs);
+        }
+        if (s.having) CollectAggregates(*s.having, own_aggs);
+        for (const OrderItem& o : s.order_by) {
+            if (o.expr) CollectAggregates(*o.expr, other_aggs);
+        }
+        for (const ExprP& a : s.totals_aggregates) {
+            if (a) CollectAggregates(*a, other_aggs);
+        }
+        for (const Expr* agg : own_aggs) {
+            if (own || AnyArgTainted(*agg)) Add("Q_AGGREGATE_ROWSET", agg->pos);
+        }
+        for (const Expr* agg : other_aggs) {
+            if (own || whole || AnyArgTainted(*agg)) Add("Q_AGGREGATE_ROWSET", agg->pos);
+        }
+    }
+
+    // Grouping by protected data hides the key unless it is returned as is: the group counts and sums then show
+    // how many rows share a hidden value.
+    void CheckGrouping(const Select& s) {
+        for (const ExprP& g : s.group_by) {
+            if (TaintedExpr(g) && !GroupItemIsSelected(s, *g)) Add("Q_GROUP_PROTECTED", g->pos);
         }
     }
 
@@ -206,6 +243,7 @@ private:
             WalkOpt(g, Ctx::GroupBy, s.pos);
             CheckOrdinal(g);
         }
+        CheckGrouping(s);
         WalkOpt(s.having, Ctx::Condition, s.pos, false);
         for (const ExprP& g : s.index_by) WalkOpt(g, Ctx::GroupBy, s.pos);
 
@@ -235,6 +273,7 @@ private:
             CheckOrdinal(t.expr);
             for (const ExprP& a : t.periods_args) WalkOpt(a, Ctx::Totals, s.pos);
         }
+        CheckAggregateRows(s);
         for (const Select::UnionPart& u : s.unions) {
             if (u.select) CheckSelect(*u.select);
         }
