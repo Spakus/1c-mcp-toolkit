@@ -76,7 +76,7 @@ if(QUERY_LINEAGE_BUILD_TESTS)
         src/strict/strict_tokenizer.cpp
         src/strict/strict_parser.cpp src/strict/ast_dump.cpp
         src/strict/canonical_printer.cpp src/strict/field_policy.cpp
-        src/strict/origin.cpp src/strict/scope.cpp src/strict/analyzer.cpp
+        src/strict/origin.cpp src/strict/scope.cpp src/strict/analyzer.cpp src/strict/rules.cpp
     )
     set(QLA_TEST_SOURCES
         tests/test_main.cpp

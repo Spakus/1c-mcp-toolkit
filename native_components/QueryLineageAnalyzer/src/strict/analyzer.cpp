@@ -4,6 +4,7 @@
 #include <utility>
 
 #include "strict/ast_dump.h"
+#include "strict/rules.h"
 
 namespace lineage::strict {
 
@@ -22,9 +23,16 @@ struct SelectOut {
     bool complete = true;
 };
 
+// Result column names a single-part ORDER BY / TOTALS path may refer to, with the labels of those columns.
+struct AliasInfo {
+    const std::vector<std::string>* names = nullptr;
+    const std::vector<Column>* columns = nullptr;
+};
+
 class Analyzer {
 public:
-    Analyzer(const FieldPolicy& policy, AnalysisResult& out) : policy_(policy), out_(out) {
+    Analyzer(const FieldPolicy& policy, AnalysisResult& out, LabelTable& labels)
+        : policy_(policy), out_(out), labels_(labels) {
         sink_.missing_tables = &out.missing_tables;
         sink_.issues = &out.resolution_issues;
     }
@@ -39,6 +47,7 @@ public:
 private:
     const FieldPolicy& policy_;
     AnalysisResult& out_;
+    LabelTable& labels_;
     ResolveSink sink_;
     std::map<std::string, TempTable> temps_;   // normalized temp-table name -> columns
 
@@ -160,7 +169,13 @@ private:
     //   allowlisted scalar and aggregate functions, operators, predicates, ВЫРАЗИТЬ, ВЫБОР (all branches AND all
     //   conditions: implicit flow) and subquery predicates -> Transform(Join(all operands));
     //   an unlisted function or an unset node -> Unknown.
-    FieldLabel Label(const Expr& e, const Scope& scope, int depth, const std::vector<std::string>* aliases) {
+    FieldLabel Label(const Expr& e, const Scope& scope, int depth, const AliasInfo* aliases) {
+        FieldLabel l = LabelNode(e, scope, depth, aliases);
+        labels_.expr[&e] = l;   // the rule engine reads the label of every node from here
+        return l;
+    }
+
+    FieldLabel LabelNode(const Expr& e, const Scope& scope, int depth, const AliasInfo* aliases) {
         switch (e.kind) {
             case Expr::K::Field: return LabelField(e, scope, aliases);
             case Expr::K::Param: return LabelParam(e);
@@ -184,7 +199,7 @@ private:
     // Casting a reference to a non-reference type may expose its presentation (unverified platform behaviour):
     // Unknown when the operand holds a reference or a parameter of unknown type. A reference target type is a
     // dotted name (Справочник.А); everything else (Строка, Число, Дата, Булево) is not.
-    FieldLabel LabelCast(const Expr& e, const Scope& scope, int depth, const std::vector<std::string>* aliases) {
+    FieldLabel LabelCast(const Expr& e, const Scope& scope, int depth, const AliasInfo* aliases) {
         const std::vector<FieldLabel> operands = LabelOperands(e, scope, depth, aliases);
         const bool to_reference = e.type_name.find('.') != std::string::npos;
         if (!to_reference && !e.args.empty() && e.args[0] &&
@@ -210,7 +225,7 @@ private:
 
     // Labels of the argument expressions, plus one entry for the columns of a subquery operand.
     std::vector<FieldLabel> LabelOperands(const Expr& e, const Scope& scope, int depth,
-                                          const std::vector<std::string>* aliases, int period_index = -1) {
+                                          const AliasInfo* aliases, int period_index = -1) {
         std::vector<FieldLabel> out;
         for (size_t i = 0; i < e.args.size(); ++i) {
             const ExprP& a = e.args[i];
@@ -235,11 +250,18 @@ private:
         return o;
     }
 
-    FieldLabel LabelField(const Expr& e, const Scope& scope, const std::vector<std::string>* aliases) {
+    FieldLabel LabelField(const Expr& e, const Scope& scope, const AliasInfo* aliases) {
         if (aliases != nullptr && e.parts.size() == 1) {
             const std::string key = FoldedKey(e.parts[0]);
-            for (const std::string& name : *aliases) {
-                if (!name.empty() && FoldedKey(name) == key) return FieldLabel();
+            for (size_t i = 0; i < aliases->names->size(); ++i) {
+                const std::string& name = (*aliases->names)[i];
+                if (name.empty() || FoldedKey(name) != key) continue;
+                FieldLabel l;   // the label of the result column the alias names
+                if (i < aliases->columns->size()) {
+                    l.origin = (*aliases->columns)[i].origin;
+                    l.refs = (*aliases->columns)[i].refs;
+                }
+                return l;
             }
         }
         return ResolveFieldPath(e.parts, e.pos, scope, policy_, sink_);
@@ -255,7 +277,7 @@ private:
         return FieldLabel();
     }
 
-    FieldLabel LabelCall(const Expr& e, const Scope& scope, int depth, const std::vector<std::string>* aliases) {
+    FieldLabel LabelCall(const Expr& e, const Scope& scope, int depth, const AliasInfo* aliases) {
         const std::vector<FieldLabel> operands = LabelOperands(e, scope, depth, aliases, PeriodArgIndex(e.text));
         switch (ClassifyCall(e.text)) {
             case CallClass::Count: return Plain(Origin::Open);   // a number, not stored data
@@ -316,12 +338,12 @@ private:
         return Plain(Transform(x.origin));
     }
 
-    void Walk(const ExprP& e, const Scope& scope, int depth, const std::vector<std::string>* aliases = nullptr) {
+    void Walk(const ExprP& e, const Scope& scope, int depth, const AliasInfo* aliases = nullptr) {
         if (e) Label(*e, scope, depth, aliases);
     }
 
     void WalkList(const std::vector<ExprP>& list, const Scope& scope, int depth,
-                  const std::vector<std::string>* aliases = nullptr) {
+                  const AliasInfo* aliases = nullptr) {
         for (const ExprP& e : list) Walk(e, scope, depth, aliases);
     }
 
@@ -345,9 +367,10 @@ private:
         Walk(s.where, scope, depth);
         WalkList(s.group_by, scope, depth);
         Walk(s.having, scope, depth);
+        WalkList(s.index_by, scope, depth);
     }
 
-    void WalkOrderAndTotals(const Select& s, const Scope& scope, int depth, const std::vector<std::string>& names) {
+    void WalkOrderAndTotals(const Select& s, const Scope& scope, int depth, const AliasInfo& names) {
         for (const OrderItem& o : s.order_by) Walk(o.expr, scope, depth, &names);
         WalkList(s.totals_aggregates, scope, depth, &names);
         for (const TotalsItem& t : s.totals_by) {
@@ -417,7 +440,6 @@ private:
         WalkConditions(head, scope, depth);
         SelectOut out = LabelItems(head, scope, depth, names, names_ok);
         if (!names_ok) out.complete = false;
-        WalkOrderAndTotals(head, scope, depth, names);
 
         for (const Select::UnionPart& u : head.unions) {
             if (!u.select) {
@@ -428,6 +450,12 @@ private:
             const SelectOut part = AnalyzeSelect(*u.select, parent, depth + 1, false);
             JoinUnionPart(out, part, u.select->pos);
         }
+        // ORDER BY / TOTALS belong to the whole union: their aliases carry the joined labels of the result columns.
+        AliasInfo alias_info;
+        alias_info.names = &names;
+        alias_info.columns = &out.columns;
+        WalkOrderAndTotals(head, scope, depth, alias_info);
+        labels_.select_columns[&head] = out.columns;
         return out;
     }
 };
@@ -436,8 +464,10 @@ private:
 
 AnalysisResult AnalyzeQuery(const Batch& batch, const FieldPolicy& policy) {
     AnalysisResult result;
-    Analyzer analyzer(policy, result);
+    LabelTable labels;
+    Analyzer analyzer(policy, result, labels);
     analyzer.Run(batch);
+    ApplyRules(batch, policy, labels, result);
     return result;
 }
 

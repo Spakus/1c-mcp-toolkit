@@ -446,3 +446,172 @@ TEST(Origin, PresentationOverNonFieldOperandFailsClosed) {
     CHECK_EQ(FirstOrigin(AnalyzeForTest(kPolicyAB,
         "ВЫБРАТЬ ПРЕДСТАВЛЕНИЕ(ЕСТЬNULL(Б.СсылкаНаА, НЕОПРЕДЕЛЕНО)) КАК Х ИЗ Справочник.Б КАК Б")), Origin::Unknown);
 }
+
+TEST(Origin, FunctionsOverProtectedNeedConfirmation) {
+    auto r = AnalyzeForTest(kPolicyAB, "ВЫБРАТЬ ПОДСТРОКА(А.Имя, 1, 1) КАК Х ИЗ Справочник.А КАК А");
+    CHECK(HasReason(r, "Q_FUNC_OVER_PROTECTED"));
+    CHECK(r.verdict == Verdict::Confirm);
+    CHECK(HasReason(AnalyzeForTest(kPolicyAB, "ВЫБРАТЬ А.Имя + \"x\" КАК Х ИЗ Справочник.А КАК А"), "Q_FUNC_OVER_PROTECTED"));
+    CHECK(HasReason(AnalyzeForTest(kPolicyAB,
+        "ВЫБРАТЬ ВЫБОР КОГДА А.Имя = &МСПТокен1 ТОГДА 1 ИНАЧЕ 0 КОНЕЦ КАК Х ИЗ Справочник.А КАК А"), "Q_FUNC_OVER_PROTECTED"));
+    CHECK(HasReason(AnalyzeForTest(kPolicyAB,
+        "ВЫБРАТЬ ВЫРАЗИТЬ(А.Имя КАК СТРОКА(10)) КАК Х ИЗ Справочник.А КАК А"), "Q_FUNC_OVER_PROTECTED"));
+    CHECK(HasReason(AnalyzeForTest(kPolicyAB,
+        "ВЫБРАТЬ ЕСТЬNULL(А.Имя, \"\") КАК Х ИЗ Справочник.А КАК А"), "Q_FUNC_OVER_PROTECTED"));
+    // an equality in the select list is a computed bit
+    CHECK(HasReason(AnalyzeForTest(kPolicyAB,
+        "ВЫБРАТЬ А.Имя = &МСПТокен1 КАК Х ИЗ Справочник.А КАК А"), "Q_FUNC_OVER_PROTECTED"));
+}
+
+TEST(Origin, EqualityRules) {
+    CHECK(HasReason(AnalyzeForTest(kPolicyAB,
+        "ВЫБРАТЬ А.Ссылка КАК С ИЗ Справочник.А КАК А ГДЕ А.Имя = \"x\""), "Q_EQ_LITERAL"));
+    CHECK(HasReason(AnalyzeForTest(kPolicyAB,
+        "ВЫБРАТЬ А.Ссылка КАК С ИЗ Справочник.А КАК А ГДЕ А.Имя = &П"), "Q_EQ_CLIENT_PARAM"));
+    CHECK(HasReason(AnalyzeForTest(kPolicyAB,
+        "ВЫБРАТЬ А.Ссылка КАК С ИЗ Справочник.А КАК А, Справочник.Б КАК Б ГДЕ А.Имя = Б.Код"), "Q_EQ_CLIENT_PARAM"));
+    auto ok = AnalyzeForTest(kPolicyAB, "ВЫБРАТЬ А.Ссылка КАК С ИЗ Справочник.А КАК А ГДЕ А.Имя = &МСПТокен1");
+    CHECK(ok.verdict == Verdict::Safe);
+    CHECK(ok.reasons.empty());
+    // reversed operands and IN
+    CHECK(AnalyzeForTest(kPolicyAB,
+        "ВЫБРАТЬ А.Ссылка КАК С ИЗ Справочник.А КАК А ГДЕ &МСПТокен1 = А.Имя").verdict == Verdict::Safe);
+    CHECK(AnalyzeForTest(kPolicyAB,
+        "ВЫБРАТЬ А.Ссылка КАК С ИЗ Справочник.А КАК А ГДЕ А.Имя В (&МСПТокен1)").verdict == Verdict::Safe);
+    CHECK(HasReason(AnalyzeForTest(kPolicyAB,
+        "ВЫБРАТЬ А.Ссылка КАК С ИЗ Справочник.А КАК А ГДЕ А.Имя В (\"a\", &МСПТокен1)"), "Q_EQ_LITERAL"));
+    // protected = protected field, and IN (subquery of a protected column)
+    CHECK(AnalyzeForTest(kPolicyAB,
+        "ВЫБРАТЬ А.Ссылка КАК С ИЗ Справочник.А КАК А, Справочник.А КАК А2 ГДЕ А.Имя = А2.Имя").verdict == Verdict::Safe);
+    CHECK(AnalyzeForTest(kPolicyAB,
+        "ВЫБРАТЬ А.Ссылка КАК С ИЗ Справочник.А КАК А ГДЕ А.Имя В (ВЫБРАТЬ А2.Имя ИЗ Справочник.А КАК А2)").verdict ==
+        Verdict::Safe);
+    CHECK(HasReason(AnalyzeForTest(kPolicyAB,
+        "ВЫБРАТЬ А.Ссылка КАК С ИЗ Справочник.А КАК А ГДЕ А.Имя В (ВЫБРАТЬ Б.Код ИЗ Справочник.Б КАК Б)"),
+        "Q_EQ_CLIENT_PARAM"));
+    // a token parameter the host marked unknown
+    auto p = FieldPolicy::FromJson(R"({"version":1,"tables":{"Справочник.А":{"fields":{
+        "Имя":{"class":"protected"},"Ссылка":{"class":"open"}}}},"params":{"Т":"token_unknown"}})");
+    CHECK(p.ok);
+    CHECK(HasReason(AnalyzeForTest(p.policy,
+        "ВЫБРАТЬ А.Ссылка КАК С ИЗ Справочник.А КАК А ГДЕ А.Имя = &Т"), "Q_EQ_UNKNOWN_TOKEN"));
+}
+
+TEST(Origin, CompareLikeBetweenOnProtected) {
+    CHECK(HasReason(AnalyzeForTest(kPolicyAB,
+        "ВЫБРАТЬ А.Ссылка КАК С ИЗ Справочник.А КАК А ГДЕ А.Имя > \"a\""), "Q_COMPARE_PROTECTED"));
+    CHECK(HasReason(AnalyzeForTest(kPolicyAB,
+        "ВЫБРАТЬ А.Ссылка КАК С ИЗ Справочник.А КАК А ГДЕ А.Имя <> &МСПТокен1"), "Q_COMPARE_PROTECTED"));
+    CHECK(HasReason(AnalyzeForTest(kPolicyAB,
+        "ВЫБРАТЬ А.Ссылка КАК С ИЗ Справочник.А КАК А ГДЕ А.Имя МЕЖДУ \"a\" И \"b\""), "Q_COMPARE_PROTECTED"));
+    CHECK(HasReason(AnalyzeForTest(kPolicyAB,
+        "ВЫБРАТЬ А.Ссылка КАК С ИЗ Справочник.А КАК А ГДЕ А.Имя ПОДОБНО \"a%\""), "Q_LIKE_PROTECTED"));
+    CHECK(HasReason(AnalyzeForTest(kPolicyAB,
+        "ВЫБРАТЬ А.Ссылка КАК С ИЗ Справочник.А КАК А ГДЕ А.Имя ЕСТЬ NULL"), "Q_FUNC_OVER_PROTECTED"));
+    // open values are free
+    CHECK(AnalyzeForTest(kPolicyAB,
+        "ВЫБРАТЬ Б.Ссылка КАК С ИЗ Справочник.Б КАК Б ГДЕ Б.Сумма > 1 И Б.Код ПОДОБНО \"a%\"").verdict == Verdict::Safe);
+}
+
+TEST(Origin, OrderingTopMinMaxTotals) {
+    CHECK(HasReason(AnalyzeForTest(kPolicyAB,
+        "ВЫБРАТЬ А.Имя КАК Нм ИЗ Справочник.А КАК А УПОРЯДОЧИТЬ ПО Нм"), "Q_ORDER_PROTECTED"));
+    CHECK(HasReason(AnalyzeForTest(kPolicyAB,
+        "ВЫБРАТЬ А.Имя КАК Нм ИЗ Справочник.А КАК А УПОРЯДОЧИТЬ ПО А.Имя"), "Q_ORDER_PROTECTED"));
+    CHECK(HasReason(AnalyzeForTest(kPolicyAB,
+        "ВЫБРАТЬ А.Имя КАК Нм ИЗ Справочник.А КАК А АВТОУПОРЯДОЧИВАНИЕ"), "Q_ORDER_PROTECTED"));
+    CHECK(HasReason(AnalyzeForTest(kPolicyAB,
+        "ВЫБРАТЬ Б.СсылкаНаА КАК К ИЗ Справочник.Б КАК Б АВТОУПОРЯДОЧИВАНИЕ"), "Q_ORDER_PROTECTED"));
+    auto top = AnalyzeForTest(kPolicyAB, "ВЫБРАТЬ ПЕРВЫЕ 5 А.Имя КАК Нм ИЗ Справочник.А КАК А УПОРЯДОЧИТЬ ПО Нм");
+    CHECK(HasReason(top, "Q_TOP_WITH_ORDER"));
+    // ordering by an open column
+    auto open = AnalyzeForTest(kPolicyAB, "ВЫБРАТЬ ПЕРВЫЕ 5 Б.Сумма КАК С ИЗ Справочник.Б КАК Б УПОРЯДОЧИТЬ ПО С");
+    CHECK(open.verdict == Verdict::Safe);
+    // a union column that is protected in the other part
+    CHECK(HasReason(AnalyzeForTest(kPolicyAB,
+        "ВЫБРАТЬ Б.Сумма КАК Х ИЗ Справочник.Б КАК Б ОБЪЕДИНИТЬ ВСЕ ВЫБРАТЬ А.Имя ИЗ Справочник.А КАК А УПОРЯДОЧИТЬ ПО Х"),
+        "Q_ORDER_PROTECTED"));
+    CHECK(HasReason(AnalyzeForTest(kPolicyAB,
+        "ВЫБРАТЬ МАКСИМУМ(А.Имя) КАК М ИЗ Справочник.А КАК А"), "Q_MINMAX_PROTECTED"));
+    CHECK(HasReason(AnalyzeForTest(kPolicyAB,
+        "ВЫБРАТЬ Б.Сумма КАК С ИЗ Справочник.Б КАК Б ИТОГИ СУММА(С) ПО ОБЩИЕ"), "Q_TOTALS"));
+}
+
+TEST(Origin, PresentationPlacement) {
+    CHECK(AnalyzeForTest(kPolicyAB,
+        "ВЫБРАТЬ ПРЕДСТАВЛЕНИЕ(Б.СсылкаНаА) КАК П ИЗ Справочник.Б КАК Б").verdict == Verdict::Safe);
+    CHECK(HasReason(AnalyzeForTest(kPolicyAB,
+        "ВЫБРАТЬ Б.Сумма КАК С ИЗ Справочник.Б КАК Б ГДЕ ПРЕДСТАВЛЕНИЕ(Б.СсылкаНаА) = \"x\""), "Q_PRESENTATION"));
+    CHECK(HasReason(AnalyzeForTest(kPolicyAB,
+        "ВЫБРАТЬ Б.Сумма КАК С ИЗ Справочник.Б КАК Б СГРУППИРОВАТЬ ПО Б.Сумма, ПРЕДСТАВЛЕНИЕ(Б.СсылкаНаА)"),
+        "Q_PRESENTATION"));
+    CHECK(HasReason(AnalyzeForTest(kPolicyAB,
+        "ВЫБРАТЬ ПРЕДСТАВЛЕНИЕ(А.Имя) КАК П ИЗ Справочник.А КАК А"), "Q_FUNC_OVER_PROTECTED"));
+}
+
+TEST(Origin, ColumnAndStructureReasons) {
+    CHECK(HasReason(AnalyzeForTest(kPolicyAB,
+        "ВЫБРАТЬ Б.Сумма КАК Х ИЗ Справочник.Б КАК Б ОБЪЕДИНИТЬ ВСЕ ВЫБРАТЬ А.Имя ИЗ Справочник.А КАК А"),
+        "Q_MIXED_COLUMN"));
+    CHECK(HasReason(AnalyzeForTest(kPolicyAB, "ВЫБРАТЬ Б.Нет КАК Х ИЗ Справочник.Б КАК Б"), "Q_UNKNOWN_COLUMN"));
+    CHECK(HasReason(AnalyzeForTest(kPolicyAB, "ВЫБРАТЬ * ИЗ Справочник.Б КАК Б"), "Q_WILDCARD"));
+    CHECK(HasReason(AnalyzeForTest(kPolicyAB, "ВЫБРАТЬ Б.* ИЗ Справочник.Б КАК Б"), "Q_WILDCARD"));
+    CHECK(HasReason(AnalyzeForTest(kPolicyAB,
+        "ВЫБРАТЬ СтранныйВызов(Б.Сумма) КАК Х ИЗ Справочник.Б КАК Б"), "Q_UNKNOWN_FUNCTION"));
+    CHECK(HasReason(AnalyzeForTest(kPolicyAB,
+        "ВЫБРАТЬ Б.Сумма КАК С ИЗ Справочник.Б КАК Б ДЛЯ ИЗМЕНЕНИЯ"), "Q_FOR_UPDATE"));
+}
+
+TEST(Origin, UnknownAnywhereAndResolutionIssuesConfirm) {
+    // Unknown in a condition only: no output column is Unknown
+    auto cond = AnalyzeForTest(kPolicyAB, "ВЫБРАТЬ Б.Сумма КАК С ИЗ Справочник.Б КАК Б ГДЕ Б.Нет > 1");
+    CHECK(cond.verdict == Verdict::Confirm);
+    CHECK(HasReason(cond, "Q_UNKNOWN_EXPR"));
+    CHECK(HasReason(cond, "Q_RESOLVE_UNKNOWN_FIELD"));
+    // Unknown inside a subquery that is never output
+    auto sub = AnalyzeForTest(kPolicyAB,
+        "ВЫБРАТЬ Б.Сумма КАК С ИЗ Справочник.Б КАК Б ГДЕ Б.Ссылка В (ВЫБРАТЬ Б2.Нет ИЗ Справочник.Б КАК Б2)");
+    CHECK(sub.verdict == Verdict::Confirm);
+    // an unlisted parameter, a missing table
+    CHECK(AnalyzeForTest(kPolicyAB,
+        "ВЫБРАТЬ Б.Сумма КАК С ИЗ Справочник.Б КАК Б ГДЕ Б.Сумма = &Нет").verdict == Verdict::Confirm);
+    auto miss = AnalyzeForTest(kPolicyAB, "ВЫБРАТЬ Вх.Х КАК Х ИЗ Справочник.Нет КАК Вх");
+    CHECK(HasReason(miss, "Q_INCOMPLETE"));
+    CHECK(miss.verdict == Verdict::Confirm);
+    // a parse failure never yields Safe
+    CHECK(AnalyzeForTest(kPolicyAB, "ВЫБРАТЬ ИЗ").verdict == Verdict::Confirm);
+}
+
+TEST(Origin, LegitimateShapesAreSafe) {
+    CHECK(AnalyzeForTest(kPolicyAB,
+        "ВЫБРАТЬ Б.СсылкаНаА КАК К, СУММА(Б.Сумма) КАК С ИЗ Справочник.Б КАК Б СГРУППИРОВАТЬ ПО Б.СсылкаНаА").verdict ==
+        Verdict::Safe);
+    CHECK(AnalyzeForTest(kPolicyAB,
+        "ВЫБРАТЬ А.Имя КАК Нм, КОЛИЧЕСТВО(*) КАК Н ИЗ Справочник.А КАК А СГРУППИРОВАТЬ ПО А.Имя").verdict == Verdict::Safe);
+    CHECK(AnalyzeForTest(kPolicyAB,
+        "ВЫБРАТЬ КОЛИЧЕСТВО(РАЗЛИЧНЫЕ А.Имя) КАК Н ИЗ Справочник.А КАК А").verdict == Verdict::Safe);
+    CHECK(AnalyzeForTest(kPolicyAB,
+        "ВЫБРАТЬ А.Имя КАК Нм, Б.Сумма КАК С ИЗ Справочник.А КАК А ВНУТРЕННЕЕ СОЕДИНЕНИЕ Справочник.Б КАК Б "
+        "ПО Б.СсылкаНаА = А.Ссылка").verdict == Verdict::Safe);
+    CHECK(AnalyzeForTest(kPolicyAB,
+        "ВЫБРАТЬ Б.Ссылка КАК С ИЗ Справочник.Б КАК Б ГДЕ Б.СсылкаНаА ЕСТЬ NULL").verdict == Verdict::Safe);
+    auto p = FieldPolicy::FromJson(R"({"version":1,"tables":{"Документ.Д":{"fields":{"Дата":{"class":"open"}}}}})");
+    CHECK(p.ok);
+    CHECK(AnalyzeForTest(p.policy,
+        "ВЫБРАТЬ НАЧАЛОПЕРИОДА(Д.Дата, МЕСЯЦ) КАК М ИЗ Документ.Д КАК Д").verdict == Verdict::Safe);
+}
+
+TEST(Origin, OrdinalOrderingAndNonLastResultSets) {
+    CHECK(HasReason(AnalyzeForTest(kPolicyAB,
+        "ВЫБРАТЬ Б.Сумма КАК С ИЗ Справочник.Б КАК Б УПОРЯДОЧИТЬ ПО 1"), "Q_ORDER_PROTECTED"));
+    CHECK(HasReason(AnalyzeForTest(kPolicyAB,
+        "ВЫБРАТЬ Б.Сумма КАК С ИЗ Справочник.Б КАК Б СГРУППИРОВАТЬ ПО 1"), "Q_ORDER_PROTECTED"));
+    // a non-last statement returning rows is checked like the last one
+    auto r = AnalyzeForTest(kPolicyAB,
+        "ВЫБРАТЬ А.Имя КАК Х ИЗ Справочник.А КАК А ОБЪЕДИНИТЬ ВСЕ ВЫБРАТЬ \"q\" ; ВЫБРАТЬ 1 КАК Y");
+    CHECK(r.verdict == Verdict::Confirm);
+    CHECK(HasReason(r, "Q_MIXED_COLUMN"));
+    // ... but a ПОМЕСТИТЬ statement is not a result set
+    CHECK(AnalyzeForTest(kPolicyAB,
+        "ВЫБРАТЬ Б.Сумма КАК Х ПОМЕСТИТЬ ВТ ИЗ Справочник.Б КАК Б; ВЫБРАТЬ ВТ.Х КАК Y ИЗ ВТ КАК ВТ").verdict == Verdict::Safe);
+}
