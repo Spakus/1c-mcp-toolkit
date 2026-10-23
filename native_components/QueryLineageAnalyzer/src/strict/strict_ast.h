@@ -26,6 +26,7 @@ struct Select;  // forward declaration (subqueries)
 
 struct Expr {
     enum class K {
+        Unset,        // default-constructed node: never valid, rejected by ValidateExpr (fail closed)
         Field,        // path: parts (original spelling)
         Param,        // text = parameter name
         StringLit,    // text = unescaped value
@@ -50,7 +51,7 @@ struct Expr {
         Row           // (a, b, ...) for multi-column В
     };
 
-    K kind = K::NumberLit;
+    K kind = K::Unset;
     Pos pos;
     std::string text;                        // literal value / operator / function name / parameter name
     std::vector<std::string> parts;          // Field path, original spelling
