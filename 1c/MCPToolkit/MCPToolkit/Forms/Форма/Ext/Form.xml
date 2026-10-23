@@ -1078,6 +1078,19 @@
 										<Event name="OnChange">ИспользоватьТочнуюАнонимизациюПриИзменении</Event>
 									</Events>
 								</CheckBoxField>
+								<CheckBoxField name="ФлагСтрогийРежимАнонимизации" id="267">
+									<DataPath>СтрогийРежимАнонимизации</DataPath>
+									<Title>
+										<v8:item>
+											<v8:lang>ru</v8:lang>
+											<v8:content>Строгий режим</v8:content>
+										</v8:item>
+									</Title>
+									<TitleLocation>Right</TitleLocation>
+									<CheckBoxType>Auto</CheckBoxType>
+									<ContextMenu name="ФлагСтрогийРежимАнонимизацииКонтекстноеМеню" id="268"/>
+									<ExtendedTooltip name="ФлагСтрогийРежимАнонимизацииРасширеннаяПодсказка" id="269"/>
+								</CheckBoxField>
 								<Button name="КнопкаНастроитьТочнуюАнонимизацию" id="92">
 									<Type>UsualButton</Type>
 									<CommandName>Form.Command.ОткрытьНастройкиТочнойАнонимизации</CommandName>
@@ -1111,6 +1124,57 @@
 									</Title>
 									<ContextMenu name="НадписьКоличествоЗаписейСловаряКонтекстноеМеню" id="106"/>
 									<ExtendedTooltip name="НадписьКоличествоЗаписейСловаряРасширеннаяПодсказка" id="105"/>
+								</LabelDecoration>
+							</ChildItems>
+						</UsualGroup>
+						<UsualGroup name="ГруппаСостояниеЗащиты" id="270">
+							<Group>Vertical</Group>
+							<ExtendedTooltip name="ГруппаСостояниеЗащитыРасширеннаяПодсказка" id="271"/>
+							<ChildItems>
+								<UsualGroup name="ГруппаСтрокаСостоянияЗащиты" id="272">
+									<Group>AlwaysHorizontal</Group>
+									<ExtendedTooltip name="ГруппаСтрокаСостоянияЗащитыРасширеннаяПодсказка" id="273"/>
+									<ChildItems>
+										<LabelDecoration name="ДекорацияСостояниеЗащиты" id="274">
+											<Title formatted="false">
+												<v8:item>
+													<v8:lang>ru</v8:lang>
+													<v8:content>Выключен</v8:content>
+												</v8:item>
+											</Title>
+											<ContextMenu name="ДекорацияСостояниеЗащитыКонтекстноеМеню" id="275"/>
+											<ExtendedTooltip name="ДекорацияСостояниеЗащитыРасширеннаяПодсказка" id="276"/>
+										</LabelDecoration>
+										<Button name="КнопкаВосстановитьДоверие" id="277">
+											<Visible>false</Visible>
+											<CommandName>Form.Command.ВосстановитьДоверие</CommandName>
+											<ExtendedTooltip name="КнопкаВосстановитьДовериеРасширеннаяПодсказка" id="278"/>
+										</Button>
+									</ChildItems>
+								</UsualGroup>
+								<LabelDecoration name="ДекорацияПредупреждениеМаскирования" id="279">
+									<Visible>false</Visible>
+									<AutoMaxWidth>false</AutoMaxWidth>
+									<TextColor>web:FireBrick</TextColor>
+									<Title formatted="false">
+										<v8:item>
+											<v8:lang>ru</v8:lang>
+											<v8:content>Строгий режим выключен: клиент, который выполняет код, может обойти маскирование</v8:content>
+										</v8:item>
+									</Title>
+									<ContextMenu name="ДекорацияПредупреждениеМаскированияКонтекстноеМеню" id="280"/>
+									<ExtendedTooltip name="ДекорацияПредупреждениеМаскированияРасширеннаяПодсказка" id="281"/>
+								</LabelDecoration>
+								<LabelDecoration name="ДекорацияПримечаниеМаскирования" id="282">
+									<AutoMaxWidth>false</AutoMaxWidth>
+									<Title formatted="false">
+										<v8:item>
+											<v8:lang>ru</v8:lang>
+											<v8:content>Маскирование защищает от случайного раскрытия, но не от клиента, который выполняет код</v8:content>
+										</v8:item>
+									</Title>
+									<ContextMenu name="ДекорацияПримечаниеМаскированияКонтекстноеМеню" id="283"/>
+									<ExtendedTooltip name="ДекорацияПримечаниеМаскированияРасширеннаяПодсказка" id="284"/>
 								</LabelDecoration>
 							</ChildItems>
 						</UsualGroup>
@@ -1727,6 +1791,17 @@
 				<v8:Type>xs:boolean</v8:Type>
 			</Type>
 		</Attribute>
+		<Attribute name="СтрогийРежимАнонимизации" id="246">
+			<Title>
+				<v8:item>
+					<v8:lang>ru</v8:lang>
+					<v8:content>Строгий режим анонимизации</v8:content>
+				</v8:item>
+			</Title>
+			<Type>
+				<v8:Type>xs:boolean</v8:Type>
+			</Type>
+		</Attribute>
 	</Attributes>
 	<Commands>
 		<Command name="Подключиться" id="1">
@@ -1803,6 +1878,15 @@
 				</v8:item>
 			</ToolTip>
 			<Action>КомандаОбновитьАдреса</Action>
+		</Command>
+		<Command name="ВосстановитьДоверие" id="204">
+			<Title>
+				<v8:item>
+					<v8:lang>ru</v8:lang>
+					<v8:content>Восстановить доверие...</v8:content>
+				</v8:item>
+			</Title>
+			<Action>ВосстановитьДоверие</Action>
 		</Command>
 	</Commands>
 </Form>
