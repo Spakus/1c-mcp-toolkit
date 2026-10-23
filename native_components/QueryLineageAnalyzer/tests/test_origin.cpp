@@ -258,3 +258,191 @@ TEST(Origin, UnknownResolutionAlwaysLeavesAnIssue) {
     CHECK_EQ(FirstOrigin(value), Origin::Unknown);
     CHECK(!value.resolution_issues.empty());
 }
+
+TEST(Origin, LatticeJoin) {
+    CHECK(JoinOrigin(Origin::Open, Origin::Open) == Origin::Open);
+    CHECK(JoinOrigin(Origin::ProtectedDirect, Origin::ProtectedDirect) == Origin::ProtectedDirect);
+    CHECK(JoinOrigin(Origin::ProtectedDirect, Origin::Open) == Origin::Mixed);
+    CHECK(JoinOrigin(Origin::ProtectedDirect, Origin::Client) == Origin::Mixed);
+    CHECK(JoinOrigin(Origin::Client, Origin::Open) == Origin::Client);    // both public to the client
+    CHECK(JoinOrigin(Origin::Unknown, Origin::Open) == Origin::Unknown);
+    CHECK(JoinOrigin(Origin::Mixed, Origin::Unknown) == Origin::Unknown);
+    CHECK(Transform(Origin::ProtectedDirect) == Origin::ProtectedDerived);
+    CHECK(Transform(Origin::Open) == Origin::Open);
+}
+
+TEST(Origin, LiteralParamAndAggregateLabels) {
+    auto r = AnalyzeForTest(kPolicyAB,
+        "ВЫБРАТЬ \"x\" КАК Л, &П КАК Пр, КОЛИЧЕСТВО(А.Имя) КАК К, А.Ссылка КАК С ИЗ Справочник.А КАК А");
+    CHECK_EQ(r.columns.size(), static_cast<size_t>(4));
+    CHECK_EQ(r.columns.at(0).origin, Origin::Client);
+    CHECK_EQ(r.columns.at(1).origin, Origin::Client);     // &П is client in kPolicyAB
+    CHECK_EQ(r.columns.at(2).origin, Origin::Open);       // count of protected = open number
+    CHECK_EQ(r.columns.at(3).origin, Origin::Open);       // GUID ref
+}
+
+TEST(Origin, ParametersByPolicyOrigin) {
+    auto token = AnalyzeForTest(kPolicyAB, "ВЫБРАТЬ &МСПТокен1 КАК Т ИЗ Справочник.А КАК А");
+    CHECK_EQ(FirstOrigin(token), Origin::ProtectedDirect);
+    auto missing = AnalyzeForTest(kPolicyAB, "ВЫБРАТЬ &Нет КАК Т ИЗ Справочник.А КАК А");
+    CHECK_EQ(FirstOrigin(missing), Origin::Unknown);
+    CHECK(HasIssue(missing, kResolveUnknownParam));
+}
+
+TEST(Origin, OtherLiteralKindsAndTypeFunctions) {
+    auto r = AnalyzeForTest(kPolicyAB,
+        "ВЫБРАТЬ 1 КАК Ч, ИСТИНА КАК Б, NULL КАК Н, НЕОПРЕДЕЛЕНО КАК Н2, ЗНАЧЕНИЕ(Справочник.А.Пустая) КАК З, "
+        "ТИПЗНАЧЕНИЯ(А.Ссылка) КАК Т, ТИП(Справочник.А) КАК Т2 ИЗ Справочник.А КАК А");
+    CHECK_EQ(r.columns.size(), static_cast<size_t>(7));
+    for (size_t i = 0; i < 4; ++i) CHECK_EQ(r.columns.at(i).origin, Origin::Client);
+    for (size_t i = 4; i < 7; ++i) CHECK_EQ(r.columns.at(i).origin, Origin::Open);
+}
+
+TEST(Origin, SumAndMinMaxAreDerivedFromProtectedInput) {
+    auto r = AnalyzeForTest(kPolicyAB,
+        "ВЫБРАТЬ СУММА(А.Код) КАК С, МАКСИМУМ(А.Имя) КАК М, МИНИМУМ(Б.Сумма) КАК М2, СУММА(Б.Сумма) КАК С2, "
+        "КОЛИЧЕСТВО(*) КАК К, КОЛИЧЕСТВО(РАЗЛИЧНЫЕ А.Имя) КАК К2 ИЗ Справочник.А КАК А, Справочник.Б КАК Б");
+    CHECK_EQ(r.columns.size(), static_cast<size_t>(6));
+    CHECK_EQ(r.columns.at(0).origin, Origin::ProtectedDerived);
+    CHECK_EQ(r.columns.at(1).origin, Origin::ProtectedDerived);
+    CHECK_EQ(r.columns.at(2).origin, Origin::Open);
+    CHECK_EQ(r.columns.at(3).origin, Origin::Open);
+    CHECK_EQ(r.columns.at(4).origin, Origin::Open);
+    CHECK_EQ(r.columns.at(5).origin, Origin::Open);
+}
+
+TEST(Origin, FunctionsCombineOperandsAndUnknownFunctionsFailClosed) {
+    auto r = AnalyzeForTest(kPolicyAB,
+        "ВЫБРАТЬ ПОДСТРОКА(А.Имя, 1, 2) КАК П, ЕСТЬNULL(Б.Сумма, 0) КАК Е, ГОД(&П) КАК Г, "
+        "ВЫРАЗИТЬ(А.Имя КАК СТРОКА(10)) КАК Вр, -Б.Сумма КАК Н, А.Имя + \"x\" КАК Ф, СтранныйВызов(Б.Сумма) КАК Х "
+        "ИЗ Справочник.А КАК А, Справочник.Б КАК Б");
+    CHECK_EQ(r.columns.size(), static_cast<size_t>(7));
+    CHECK_EQ(r.columns.at(0).origin, Origin::Mixed);       // protected + literal operands
+    CHECK_EQ(r.columns.at(1).origin, Origin::Client);      // open + literal
+    CHECK_EQ(r.columns.at(2).origin, Origin::Client);
+    CHECK_EQ(r.columns.at(3).origin, Origin::ProtectedDerived);
+    CHECK_EQ(r.columns.at(4).origin, Origin::Open);
+    CHECK_EQ(r.columns.at(5).origin, Origin::Mixed);
+    CHECK_EQ(r.columns.at(6).origin, Origin::Unknown);     // function outside the allowlist
+}
+
+TEST(Origin, PredicatesDeriveFromTheirOperands) {
+    auto r = AnalyzeForTest(kPolicyAB,
+        "ВЫБРАТЬ А.Имя = \"x\" КАК Р, А.Имя В (\"a\", \"b\") КАК В1, А.Имя ПОДОБНО \"a%\" КАК П, "
+        "А.Код МЕЖДУ 1 И 2 КАК М, А.Имя ЕСТЬ NULL КАК Н, Б.Сумма > 1 КАК С "
+        "ИЗ Справочник.А КАК А, Справочник.Б КАК Б");
+    CHECK_EQ(r.columns.size(), static_cast<size_t>(6));
+    for (size_t i = 0; i < 4; ++i) CHECK_EQ(r.columns.at(i).origin, Origin::Mixed);
+    CHECK_EQ(r.columns.at(4).origin, Origin::ProtectedDerived);
+    CHECK_EQ(r.columns.at(5).origin, Origin::Client);
+}
+
+TEST(Origin, InSubqueryJoinsSubqueryColumns) {
+    auto r = AnalyzeForTest(kPolicyAB,
+        "ВЫБРАТЬ Б.Сумма В (ВЫБРАТЬ А.Имя ИЗ Справочник.А КАК А) КАК Х ИЗ Справочник.Б КАК Б");
+    CHECK_EQ(FirstOrigin(r), Origin::Mixed);
+    auto open = AnalyzeForTest(kPolicyAB,
+        "ВЫБРАТЬ Б.Сумма В (ВЫБРАТЬ Б2.Сумма ИЗ Справочник.Б КАК Б2) КАК Х ИЗ Справочник.Б КАК Б");
+    CHECK_EQ(FirstOrigin(open), Origin::Open);
+    auto wild = AnalyzeForTest(kPolicyAB,
+        "ВЫБРАТЬ Б.Сумма В (ВЫБРАТЬ * ИЗ Справочник.Б КАК Б2) КАК Х ИЗ Справочник.Б КАК Б");
+    CHECK_EQ(FirstOrigin(wild), Origin::Unknown);
+}
+
+TEST(Origin, CaseCombinesBranchesAndConditions) {
+    // implicit flow: constant branches, but the condition reads a protected value
+    auto flow = AnalyzeForTest(kPolicyAB,
+        "ВЫБРАТЬ ВЫБОР КОГДА А.Имя = \"x\" ТОГДА 1 ИНАЧЕ 0 КОНЕЦ КАК Х ИЗ Справочник.А КАК А");
+    CHECK_EQ(FirstOrigin(flow), Origin::Mixed);
+    auto simple = AnalyzeForTest(kPolicyAB,
+        "ВЫБРАТЬ ВЫБОР А.Имя КОГДА \"x\" ТОГДА 1 ИНАЧЕ 0 КОНЕЦ КАК Х ИЗ Справочник.А КАК А");
+    CHECK_EQ(FirstOrigin(simple), Origin::Mixed);
+    auto branch = AnalyzeForTest(kPolicyAB,
+        "ВЫБРАТЬ ВЫБОР КОГДА Б.Сумма > 1 ТОГДА А.Имя ИНАЧЕ А.Имя КОНЕЦ КАК Х ИЗ Справочник.А КАК А, Справочник.Б КАК Б");
+    CHECK_EQ(FirstOrigin(branch), Origin::Mixed);   // client-visible condition joined with a protected branch
+    auto only = AnalyzeForTest(kPolicyAB,
+        "ВЫБРАТЬ ВЫБОР КОГДА А.Имя ЕСТЬ NULL ТОГДА А.Код ИНАЧЕ А.Имя КОНЕЦ КАК Х ИЗ Справочник.А КАК А");
+    CHECK_EQ(FirstOrigin(only), Origin::ProtectedDerived);
+    auto plain = AnalyzeForTest(kPolicyAB,
+        "ВЫБРАТЬ ВЫБОР КОГДА Б.Сумма > 1 ТОГДА 1 ИНАЧЕ 0 КОНЕЦ КАК Х ИЗ Справочник.Б КАК Б");
+    CHECK_EQ(FirstOrigin(plain), Origin::Client);
+    auto unknown = AnalyzeForTest(kPolicyAB,
+        "ВЫБРАТЬ ВЫБОР КОГДА Б.Нет > 1 ТОГДА 1 КОНЕЦ КАК Х ИЗ Справочник.Б КАК Б");
+    CHECK_EQ(FirstOrigin(unknown), Origin::Unknown);
+}
+
+TEST(Origin, ReferencePresentationBelongsToTheMainSpace) {
+    auto fn = AnalyzeForTest(kPolicyAB,
+        "ВЫБРАТЬ ПРЕДСТАВЛЕНИЕ(Б.СсылкаНаА) КАК П, ПРЕДСТАВЛЕНИЕССЫЛКИ(Б.СсылкаНаА) КАК П2 ИЗ Справочник.Б КАК Б");
+    CHECK_EQ(fn.columns.at(0).origin, Origin::ProtectedDirect);
+    CHECK_EQ(fn.columns.at(1).origin, Origin::ProtectedDirect);
+    // presentation of an open table
+    auto p = FieldPolicy::FromJson(R"({"version":1,"tables":{
+        "Документ.Д":{"fields":{"Вид":{"class":"open","refs":["Справочник.О"]}}},
+        "Справочник.О":{"presentation":"open","fields":{"Код":{"class":"open"}}}}})");
+    CHECK(p.ok);
+    CHECK_EQ(FirstOrigin(AnalyzeForTest(p.policy, "ВЫБРАТЬ ПРЕДСТАВЛЕНИЕ(Д.Вид) КАК П ИЗ Документ.Д КАК Д")),
+             Origin::Open);
+    // a protected scalar operand: a plain function over protected data
+    CHECK_EQ(FirstOrigin(AnalyzeForTest(kPolicyAB, "ВЫБРАТЬ ПРЕДСТАВЛЕНИЕ(А.Имя) КАК П ИЗ Справочник.А КАК А")),
+             Origin::ProtectedDerived);
+    // an operand whose type cannot be proven (a parameter may hold any reference): fail closed
+    CHECK_EQ(FirstOrigin(AnalyzeForTest(kPolicyAB, "ВЫБРАТЬ ПРЕДСТАВЛЕНИЕ(&П) КАК П ИЗ Справочник.А КАК А")),
+             Origin::Unknown);
+    // a target that the policy does not list
+    auto q = FieldPolicy::FromJson(R"({"version":1,"tables":{
+        "Документ.Д":{"fields":{"Вид":{"class":"open","refs":["Справочник.Нет"]}}}}})");
+    CHECK(q.ok);
+    auto miss = AnalyzeForTest(q.policy, "ВЫБРАТЬ ПРЕДСТАВЛЕНИЕ(Д.Вид) КАК П ИЗ Документ.Д КАК Д");
+    CHECK_EQ(FirstOrigin(miss), Origin::Unknown);
+    CHECK(miss.missing_tables.count("Справочник.Нет") == 1);
+}
+
+TEST(Origin, CallClassification) {
+    CHECK(ClassifyCall("КОЛИЧЕСТВО") == CallClass::Count);
+    CHECK(ClassifyCall("count") == CallClass::Count);
+    CHECK(ClassifyCall("СУММА") == CallClass::Sum);
+    CHECK(ClassifyCall("МАКСИМУМ") == CallClass::MinMax);
+    CHECK(ClassifyCall("ПРЕДСТАВЛЕНИЕ") == CallClass::Presentation);
+    CHECK(ClassifyCall("ТИПЗНАЧЕНИЯ") == CallClass::TypeOf);
+    CHECK(ClassifyCall("ПОДСТРОКА") == CallClass::Plain);
+    CHECK(ClassifyCall("Подстрока") == CallClass::Plain);
+    CHECK(ClassifyCall("СтранныйВызов") == CallClass::Unrecognized);
+}
+
+TEST(Origin, CastOfReferenceToNonReferenceTypeFailsClosed) {
+    auto str = AnalyzeForTest(kPolicyAB, "ВЫБРАТЬ ВЫРАЗИТЬ(Б.СсылкаНаА КАК СТРОКА(50)) КАК Х ИЗ Справочник.Б КАК Б");
+    CHECK_EQ(FirstOrigin(str), Origin::Unknown);
+    auto param = AnalyzeForTest(kPolicyAB, "ВЫБРАТЬ ВЫРАЗИТЬ(&П КАК СТРОКА(50)) КАК Х ИЗ Справочник.Б КАК Б");
+    CHECK_EQ(FirstOrigin(param), Origin::Unknown);
+    auto to_ref = AnalyzeForTest(kPolicyAB, "ВЫБРАТЬ ВЫРАЗИТЬ(Б.СсылкаНаА КАК Справочник.А) КАК Х ИЗ Справочник.Б КАК Б");
+    CHECK_EQ(FirstOrigin(to_ref), Origin::Open);
+    auto scalar = AnalyzeForTest(kPolicyAB, "ВЫБРАТЬ ВЫРАЗИТЬ(Б.Сумма КАК ЧИСЛО(15, 2)) КАК Х ИЗ Справочник.Б КАК Б");
+    CHECK_EQ(FirstOrigin(scalar), Origin::Open);
+}
+
+TEST(Origin, TypeOfDependsOnOperandOrigin) {
+    CHECK_EQ(FirstOrigin(AnalyzeForTest(kPolicyAB, "ВЫБРАТЬ ТИПЗНАЧЕНИЯ(А.Имя) КАК Х ИЗ Справочник.А КАК А")),
+             Origin::ProtectedDerived);
+    CHECK_EQ(FirstOrigin(AnalyzeForTest(kPolicyAB, "ВЫБРАТЬ ТИПЗНАЧЕНИЯ(Б.Сумма) КАК Х ИЗ Справочник.Б КАК Б")),
+             Origin::Open);
+}
+
+TEST(Origin, PeriodArgumentIsAConstant) {
+    auto p = FieldPolicy::FromJson(R"({"version":1,"tables":{
+        "Документ.Д":{"fields":{"Дата":{"class":"open"}}}}})");
+    CHECK(p.ok);
+    CHECK_EQ(FirstOrigin(AnalyzeForTest(p.policy, "ВЫБРАТЬ НАЧАЛОПЕРИОДА(Д.Дата, ДЕНЬ) КАК Х ИЗ Документ.Д КАК Д")),
+             Origin::Open);
+    CHECK_EQ(FirstOrigin(AnalyzeForTest(p.policy, "ВЫБРАТЬ РАЗНОСТЬДАТ(Д.Дата, Д.Дата, МЕСЯЦ) КАК Х ИЗ Документ.Д КАК Д")),
+             Origin::Open);
+    // any other identifier there is a field lookup
+    auto r = AnalyzeForTest(p.policy, "ВЫБРАТЬ НАЧАЛОПЕРИОДА(Д.Дата, Нечто) КАК Х ИЗ Документ.Д КАК Д");
+    CHECK_EQ(FirstOrigin(r), Origin::Unknown);
+    CHECK(!r.resolution_issues.empty());
+}
+
+TEST(Origin, PresentationOverNonFieldOperandFailsClosed) {
+    CHECK_EQ(FirstOrigin(AnalyzeForTest(kPolicyAB,
+        "ВЫБРАТЬ ПРЕДСТАВЛЕНИЕ(ЕСТЬNULL(Б.СсылкаНаА, НЕОПРЕДЕЛЕНО)) КАК Х ИЗ Справочник.Б КАК Б")), Origin::Unknown);
+}

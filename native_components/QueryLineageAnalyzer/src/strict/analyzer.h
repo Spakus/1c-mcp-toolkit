@@ -16,6 +16,14 @@
 // whether or not a resolution issue was recorded. Resolution assumes the policy lists every field of every table;
 // a name that an outer query resolves while an inner policy table does not list it is reported as ambiguous.
 
+// Notes for Tasks 17/18 (not yet enforced by labels):
+//  (a) a subquery's result must carry taint from its ГДЕ / JOIN ON / СГРУППИРОВАТЬ / ИМЕЮЩИЕ conditions;
+//      SubqueryOrigin here folds in only the returned columns, so the rule engine must add the conditions.
+//  (b) КОЛИЧЕСТВО / СУММА over open fields are Open, but with a protected filter, join or grouping they leak
+//      through the row set: they must not auto-pass.
+//  (c) the host must classify EVERY parameter in the policy: a client parameter named differently can still carry
+//      a token. Task 17 states this assumption; an unlisted parameter is Unknown here.
+
 namespace lineage::strict {
 
 struct Reason {

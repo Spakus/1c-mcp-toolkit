@@ -153,23 +153,167 @@ private:
     // ---- expressions ----
 
     // `aliases` (ORDER BY / TOTALS only): result column names that a single-part path may refer to.
+    // Label rules (fail closed; every operand is resolved even when the label ignores it, so unknown names and
+    // missing tables inside it are reported):
+    //   Field -> its policy class; Param -> the policy origin of the parameter; literals -> Client;
+    //   ЗНАЧЕНИЕ / ТИП / ТИПЗНАЧЕНИЯ / КОЛИЧЕСТВО -> Open; ПРЕДСТАВЛЕНИЕ(ref) -> presentation class of the targets;
+    //   allowlisted scalar and aggregate functions, operators, predicates, ВЫРАЗИТЬ, ВЫБОР (all branches AND all
+    //   conditions: implicit flow) and subquery predicates -> Transform(Join(all operands));
+    //   an unlisted function or an unset node -> Unknown.
     FieldLabel Label(const Expr& e, const Scope& scope, int depth, const std::vector<std::string>* aliases) {
-        if (e.kind == Expr::K::Field) {
-            if (aliases != nullptr && e.parts.size() == 1) {
-                const std::string key = FoldedKey(e.parts[0]);
-                for (const std::string& name : *aliases) {
-                    if (!name.empty() && FoldedKey(name) == key) return FieldLabel();
-                }
+        switch (e.kind) {
+            case Expr::K::Field: return LabelField(e, scope, aliases);
+            case Expr::K::Param: return LabelParam(e);
+            case Expr::K::StringLit:
+            case Expr::K::NumberLit:
+            case Expr::K::BoolLit:
+            case Expr::K::NullLit:
+            case Expr::K::UndefinedLit: return Plain(Origin::Client);
+            case Expr::K::ValueFn:
+            case Expr::K::TypeFn: return Plain(Origin::Open);
+            case Expr::K::Call: return LabelCall(e, scope, depth, aliases);
+            case Expr::K::Unset: return FieldLabel();
+            default: break;
+        }
+        if (e.kind == Expr::K::Cast) return LabelCast(e, scope, depth, aliases);
+        // Unary, Binary, Case, InList, InSubquery, InHierarchy, Between, Like, IsNullTest, RefsTest, Row
+        std::vector<FieldLabel> operands = LabelOperands(e, scope, depth, aliases);
+        return Plain(DerivedFrom(operands));
+    }
+
+    // Casting a reference to a non-reference type may expose its presentation (unverified platform behaviour):
+    // Unknown when the operand holds a reference or a parameter of unknown type. A reference target type is a
+    // dotted name (Справочник.А); everything else (Строка, Число, Дата, Булево) is not.
+    FieldLabel LabelCast(const Expr& e, const Scope& scope, int depth, const std::vector<std::string>* aliases) {
+        const std::vector<FieldLabel> operands = LabelOperands(e, scope, depth, aliases);
+        const bool to_reference = e.type_name.find('.') != std::string::npos;
+        if (!to_reference && !e.args.empty() && e.args[0] &&
+            (!operands[0].refs.empty() || e.args[0]->kind == Expr::K::Param)) {
+            return FieldLabel();
+        }
+        return Plain(DerivedFrom(operands));
+    }
+
+    static FieldLabel Plain(Origin origin) {
+        FieldLabel l;
+        l.origin = origin;
+        return l;
+    }
+
+    // Transform(Join(all operands)); no operands (e.g. a constant call) is Open.
+    static Origin DerivedFrom(const std::vector<FieldLabel>& operands) {
+        if (operands.empty()) return Origin::Open;
+        Origin o = operands[0].origin;
+        for (size_t i = 1; i < operands.size(); ++i) o = JoinOrigin(o, operands[i].origin);
+        return Transform(o);
+    }
+
+    // Labels of the argument expressions, plus one entry for the columns of a subquery operand.
+    std::vector<FieldLabel> LabelOperands(const Expr& e, const Scope& scope, int depth,
+                                          const std::vector<std::string>* aliases, int period_index = -1) {
+        std::vector<FieldLabel> out;
+        for (size_t i = 0; i < e.args.size(); ++i) {
+            const ExprP& a = e.args[i];
+            if (a && static_cast<int>(i) == period_index && a->kind == Expr::K::Field && a->parts.size() == 1 &&
+                IsPeriodName(a->parts[0])) {
+                out.push_back(Plain(Origin::Open));   // a period constant, not a field lookup
+            } else if (a) out.push_back(Label(*a, scope, depth, aliases));
+            else out.push_back(FieldLabel());   // a null operand is malformed: Unknown
+        }
+        if (e.subquery) {
+            const SelectOut sub = AnalyzeSelect(*e.subquery, &scope, depth + 1, false);
+            out.push_back(Plain(SubqueryOrigin(sub)));
+        }
+        return out;
+    }
+
+    // Join of every column the subquery returns; Unknown when the column list cannot be enumerated.
+    static Origin SubqueryOrigin(const SelectOut& sub) {
+        if (!sub.complete || sub.columns.empty()) return Origin::Unknown;
+        Origin o = sub.columns[0].origin;
+        for (size_t i = 1; i < sub.columns.size(); ++i) o = JoinOrigin(o, sub.columns[i].origin);
+        return o;
+    }
+
+    FieldLabel LabelField(const Expr& e, const Scope& scope, const std::vector<std::string>* aliases) {
+        if (aliases != nullptr && e.parts.size() == 1) {
+            const std::string key = FoldedKey(e.parts[0]);
+            for (const std::string& name : *aliases) {
+                if (!name.empty() && FoldedKey(name) == key) return FieldLabel();
             }
-            return ResolveFieldPath(e.parts, e.pos, scope, policy_, sink_);
         }
-        // Other expression kinds get their labels in Task 16; until then they are Unknown, but their operands
-        // are still resolved so that unknown names and missing tables inside them are reported.
-        for (const ExprP& a : e.args) {
-            if (a) Label(*a, scope, depth, aliases);
+        return ResolveFieldPath(e.parts, e.pos, scope, policy_, sink_);
+    }
+
+    FieldLabel LabelParam(const Expr& e) {
+        switch (policy_.OriginOfParam(e.text)) {
+            case ParamOrigin::Client: return Plain(Origin::Client);
+            case ParamOrigin::TokenProtected: return Plain(Origin::ProtectedDirect);   // equality operand (Task 17)
+            case ParamOrigin::TokenUnknown: break;
+            case ParamOrigin::Missing: sink_.Issue(kResolveUnknownParam, e.pos); break;
         }
-        if (e.subquery) AnalyzeSelect(*e.subquery, &scope, depth + 1, false);
         return FieldLabel();
+    }
+
+    FieldLabel LabelCall(const Expr& e, const Scope& scope, int depth, const std::vector<std::string>* aliases) {
+        const std::vector<FieldLabel> operands = LabelOperands(e, scope, depth, aliases, PeriodArgIndex(e.text));
+        switch (ClassifyCall(e.text)) {
+            case CallClass::Count: return Plain(Origin::Open);   // a number, not stored data
+            case CallClass::TypeOf: {
+                // a type name is public, but the choice of the type may depend on a protected value
+                const bool open = operands.size() == 1 &&
+                                  (operands[0].origin == Origin::Open || operands[0].origin == Origin::Client);
+                return Plain(open ? Origin::Open : DerivedFrom(operands));
+            }
+            case CallClass::Sum:
+            case CallClass::MinMax:
+            case CallClass::Plain: return Plain(DerivedFrom(operands));
+            case CallClass::Presentation: return LabelPresentation(e, operands);
+            case CallClass::Unrecognized: break;
+        }
+        return FieldLabel();
+    }
+
+    static Origin FromClass(FieldClass cls) {
+        switch (cls) {
+            case FieldClass::Open: return Origin::Open;
+            case FieldClass::Protected: return Origin::ProtectedDirect;
+            case FieldClass::Unknown: break;
+        }
+        return Origin::Unknown;
+    }
+
+    // The presentation of a reference is computed by the platform from stored data of the target: it is a direct
+    // read of the target's presentation (main token space), joined over every possible target.
+    Origin PresentationOfTargets(const std::vector<std::string>& targets) {
+        Origin o = Origin::Open;
+        bool first = true;
+        for (const std::string& t : targets) {
+            Origin one = Origin::Unknown;
+            if (policy_.HasTable(t)) one = FromClass(policy_.PresentationClass(t));
+            else sink_.MissingTable(t);
+            o = first ? one : JoinOrigin(o, one);
+            first = false;
+        }
+        return o;
+    }
+
+    FieldLabel LabelPresentation(const Expr& e, const std::vector<FieldLabel>& operands) {
+        if (e.args.size() != 1 || !e.args[0] || operands.size() != 1) return FieldLabel();
+        const FieldLabel& x = operands[0];
+        const Expr::K kind = e.args[0]->kind;
+        if (x.origin == Origin::Unknown) return FieldLabel();
+        if (!x.refs.empty()) {
+            Origin o = PresentationOfTargets(x.refs);
+            if (x.origin != Origin::Open && x.origin != Origin::Client) o = JoinOrigin(o, Transform(x.origin));
+            return Plain(o);
+        }
+        if (kind == Expr::K::StringLit || kind == Expr::K::NumberLit || kind == Expr::K::BoolLit) return Plain(x.origin);
+        // No known target: a public-looking operand may still hold a reference (a parameter, a column whose
+        // targets were lost), whose presentation is stored data. Only operands that are protected anyway are
+        // a plain function over protected data.
+        if (x.origin == Origin::Open || x.origin == Origin::Client) return FieldLabel();
+        return Plain(Transform(x.origin));
     }
 
     void Walk(const ExprP& e, const Scope& scope, int depth, const std::vector<std::string>* aliases = nullptr) {
