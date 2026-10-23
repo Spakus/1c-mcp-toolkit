@@ -831,6 +831,7 @@ std::shared_ptr<Select> P::Query(bool top) {
 
 Batch P::ParseBatch() {
     Batch b;
+    if (Peek().kind == Tk::End) Error("Q_PARSE_EMPTY", "empty batch");
     for (;;) {
         if (b.statements.size() >= kMaxBatchStatements) Error("Q_PARSE_LIMIT", "too many statements");
         Statement st;

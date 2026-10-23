@@ -690,3 +690,44 @@ TEST(StrictParser, SubqueryInVirtualTableParamIsWalked) {
     params[1]->subquery->items[0].expr->kind = Expr::K::Unset;
     CHECK(!ValidateBatch(r.batch, err));
 }
+
+// ---- fail-closed limits and error reporting ----
+
+TEST(StrictParser, ErrorCarriesPosition) {
+    auto r = ParseBatchStrict("ВЫБРАТЬ\n  Х ИЗ Справочник.А КАК А ГДЕ А.Х ПОДОБНО");
+    CHECK(!r.ok);
+    CHECK_EQ(r.error.pos.line, 2u);
+    CHECK(r.error.code.rfind("Q_PARSE_", 0) == 0);
+}
+
+TEST(StrictParser, NeverThrowsOnGarbage) {
+    const std::string seeds[] = {"", ";", ";;;", "ВЫБРАТЬ", ")", "\"", "&", "ВЫБРАТЬ (((((", "\xFF\xFE"};
+    for (const auto& s : seeds) {
+        auto r = ParseBatchStrict(s);
+        CHECK(!r.ok);
+        CHECK(r.error.code.rfind("Q_PARSE_", 0) == 0);
+    }
+}
+
+TEST(StrictParser, EmptyBatchIsError) {
+    CHECK_EQ(BatchDump(""), std::string("ERR:Q_PARSE_EMPTY"));
+    CHECK_EQ(BatchDump("   \n// только комментарий\n"), std::string("ERR:Q_PARSE_EMPTY"));
+}
+
+TEST(StrictParser, InvalidUtf8IsTokenError) {
+    CHECK_EQ(BatchDump("ВЫБРАТЬ \xFF КАК Х"), std::string("ERR:Q_PARSE_TOKEN"));
+}
+
+TEST(StrictParser, ErrorDetailNeverEchoesInput) {
+    const std::string secret = "СекретноеИмя123";
+    const std::string inputs[] = {
+        "ВЫБРАТЬ " + secret + " ГДЕ", "ВЫБРАТЬ 1 КАК " + secret + secret + " ИЗ", "ВЫБРАТЬ \"" + secret + "\" ПОДОБНО",
+        "ВЫБРАТЬ " + secret + "\xFF", "ВЫБРАТЬ " + secret + ".ВЫБРАТЬ", "ВЫБРАТЬ " + secret + ".A = = 1",
+        "ВЫБРАТЬ Latin" + std::string("\xD0\xB0") + secret};
+    for (const auto& in : inputs) {
+        auto r = ParseBatchStrict(in);
+        CHECK(!r.ok);
+        CHECK(r.error.detail.find(secret) == std::string::npos);
+        CHECK(r.error.detail.find("СекретноеИмя") == std::string::npos);
+    }
+}
