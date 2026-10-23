@@ -1,6 +1,7 @@
 #include "component.h"
 
 #include "schema_enricher.h"
+#include "strict/check_query.h"
 #include "utf_utils.h"
 
 #include <algorithm>
@@ -13,14 +14,23 @@
 
 namespace lineage {
 
+namespace {
+const wchar_t* const kCheckFailClosed =
+    L"{\"api\":1,\"verdict\":\"confirm\",\"reasons\":[{\"code\":\"Q_INTERNAL\"}]}";
+}  // namespace
+
 const wchar_t* QueryLineageAnalyzerComponent::method_names_en_[] = {
     L"AnalyzeSources",
     L"Version",
+    L"CheckQuery",
+    L"CheckCode",
 };
 
 const wchar_t* QueryLineageAnalyzerComponent::method_names_ru_[] = {
     L"АнализироватьИсточники",
     L"Версия",
+    L"ПроверитьЗапрос",
+    L"ПроверитьКод",
 };
 
 bool QueryLineageAnalyzerComponent::Init(void* disp) {
@@ -68,7 +78,10 @@ const WCHAR_T* QueryLineageAnalyzerComponent::GetMethodName(const long lMethodNu
 }
 
 long QueryLineageAnalyzerComponent::GetNParams(const long lMethodNum) {
-    if (lMethodNum == eMethodAnalyzeSources) return 2;
+    if (lMethodNum == eMethodAnalyzeSources || lMethodNum == eMethodCheckQuery ||
+        lMethodNum == eMethodCheckCode) {
+        return 2;
+    }
     return 0;
 }
 
@@ -99,16 +112,32 @@ bool QueryLineageAnalyzerComponent::CallAsFunc(const long lMethodNum, tVariant* 
                 std::string enriched = AnalyzeSourcesImpl(query_utf8, schema_utf8);
                 return SetWStringToVariant(pvarRetValue, UTF8ToWString(enriched));
             }
+            case eMethodCheckQuery: {
+                if (lSizeArray < 2) return false;
+                std::string out = strict::CheckQueryImpl(WStringToUTF8(GetWStringFromVariant(&paParams[0])),
+                                                         WStringToUTF8(GetWStringFromVariant(&paParams[1])));
+                return SetWStringToVariant(pvarRetValue, UTF8ToWString(out));
+            }
+            case eMethodCheckCode:   // not implemented yet: fail closed
+                return SetWStringToVariant(
+                    pvarRetValue, L"{\"api\":1,\"verdict\":\"confirm\",\"reasons\":[{\"code\":\"C_NOT_IMPLEMENTED\"}]}");
             case eMethodVersion:
-                return SetWStringToVariant(pvarRetValue, L"0.1.2");
+                return SetWStringToVariant(pvarRetValue, L"0.2.0");
             default:
                 return false;
         }
     } catch (...) {
-        if (lMethodNum == eMethodAnalyzeSources && lSizeArray >= 2) {
-            return SetWStringToVariant(pvarRetValue, GetWStringFromVariant(&paParams[1]));
+        try {
+            if (lMethodNum == eMethodAnalyzeSources && lSizeArray >= 2) {
+                return SetWStringToVariant(pvarRetValue, GetWStringFromVariant(&paParams[1]));
+            }
+            if (lMethodNum == eMethodCheckQuery || lMethodNum == eMethodCheckCode) {
+                return SetWStringToVariant(pvarRetValue, kCheckFailClosed);
+            }
+            return SetWStringToVariant(pvarRetValue, L"");
+        } catch (...) {
+            return false;
         }
-        return SetWStringToVariant(pvarRetValue, L"");
     }
 }
 
