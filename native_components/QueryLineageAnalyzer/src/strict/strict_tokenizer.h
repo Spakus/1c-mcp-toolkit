@@ -36,4 +36,9 @@ struct Token {
 std::vector<Token> Tokenize(const std::string& utf8);
 const char* CanonicalKeyword(Kw kw);   // Russian canonical spelling, used by the printer
 
+// True when the whole of `name` is spelled in the alphabet of an identifier and of a parameter after '&': a start
+// character (ASCII letter, '_', Russian Cyrillic letter U+0410-U+044F, U+0401, U+0451), then start characters or ASCII digits.
+// Empty names, spaces, invisible characters and look-alikes from other scripts are false.
+bool IsIdentifierName(const std::string& name);
+
 }  // namespace lineage::strict

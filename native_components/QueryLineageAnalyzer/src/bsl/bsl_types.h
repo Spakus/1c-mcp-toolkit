@@ -36,6 +36,16 @@
 //   - names are matched case-insensitively with ё = е; two variable spellings that differ only in ё / е are
 //     C_AMBIGUOUS_IDENT, so the result does not depend on whether the platform treats them as one name.
 //
+// Lost queries: a Запрос site is modelled only through Выполнить, УстановитьПараметр with the allowed arity and a
+// literal, non-reserved name, and Текст assignments of a constant-folded text. Any other use of a Запрос value is a
+// reason, and the results of that site are no longer labelled from its texts, so a confirmed run cannot return a
+// value under a weaker label than the one it really has:
+//   - parameters the walk cannot follow (C_DYNAMIC_PARAM, C_RESERVED, C_BAD_ARGS on a Запрос method, a member,
+//     method, index or iteration the allowlist does not have on Запрос, Параметры included): the columns keep their
+//     names, every label is Unknown and no reference target is known (LabelState::unlabeled_queries);
+//   - a text the walk cannot follow (C_DYNAMIC_QUERY, C_QUERY_ESCAPES: the copy may be changed by code the walk does
+//     not see, C_BAD_ARGS of Новый Запрос): no column is known (LabelState::untracked_queries).
+//
 // Label rules (Task 25; the lattice is lineage::strict::Origin, the same as the query checker's):
 //   - literals are Client; a whole string literal equal to an issued token is that token's origin (ProtectedDirect
 //     or Unknown) and is printed as МСПЗначенияТокенов[n]; a query column has its CheckQuery label; a dereferenced
@@ -158,7 +168,14 @@ struct ParamBinding {
 struct LabelState {
     std::map<const Expr*, ObjectLabels> objects;                         // key: the allocating expression
     std::map<const Expr*, std::map<std::string, ParamBinding>> params;   // Запрос site -> AllowlistKey(name)
-    bool operator==(const LabelState& o) const { return objects == o.objects && params == o.params; }
+    // Запрос sites the walk cannot follow (see "Lost queries" above): unlabeled ones keep their column names with
+    // Unknown labels, untracked ones (the text may differ from every recorded one) have no known columns at all.
+    std::set<const Expr*> unlabeled_queries;
+    std::set<const Expr*> untracked_queries;
+    bool operator==(const LabelState& o) const {
+        return objects == o.objects && params == o.params && unlabeled_queries == o.unlabeled_queries &&
+               untracked_queries == o.untracked_queries;
+    }
 };
 
 struct CodeReason {
@@ -199,8 +216,11 @@ inline bool IsTainted(Origin o) { return o != Origin::Open && o != Origin::Clien
 //   C_DYNAMIC_QUERY   query text that is not a constant-folded literal
 //   C_DYNAMIC_KEY     structure / map key (index, Свойство) or a type name that is not a literal
 //   C_DYNAMIC_PARAM   query parameter name that is not a literal
+//   C_BAD_PARAM_NAME  query parameter name literal outside the alphabet of a parameter after '&' (empty, a space, a
+//                     digit first, an invisible or look-alike character; strict::IsIdentifierName)
 //   C_BAD_ARGS        argument count outside the allowlisted range, or a malformed out-parameter
-//   C_QUERY_ESCAPES   a Запрос value used other than as a receiver
+//   C_QUERY_ESCAPES   a Запрос value used other than as a receiver (its results are no longer labelled, see "Lost
+//                     queries")
 //   C_AMBIGUOUS_IDENT variable spellings that differ only in ё / е
 //   C_LIMIT / C_PARSE a tree that fails ValidateBody (hand-built trees); C_LIMIT also when the walk or the fixpoint
 //                     runs out of budget

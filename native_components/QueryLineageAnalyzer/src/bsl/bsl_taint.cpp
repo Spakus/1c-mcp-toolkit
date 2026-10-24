@@ -94,7 +94,15 @@ public:
             over.reasons.push_back(reason);
             return checks_.emplace(key, std::move(over)).first->second;
         }
-        return checks_.emplace(key, strict::CheckQueryWithPolicy(text, PolicyWith(params_key, params))).first->second;
+        const strict::FieldPolicy* policy = PolicyWith(params_key, params);
+        if (!policy) {
+            strict::QueryCheckResult invalid;
+            strict::QueryReason reason;
+            reason.code = "Q_POLICY_INVALID";
+            invalid.reasons.push_back(reason);
+            return checks_.emplace(key, std::move(invalid)).first->second;
+        }
+        return checks_.emplace(key, strict::CheckQueryWithPolicy(text, *policy)).first->second;
     }
 
     // The columns of a site: the worst label across its texts. Null when a text did not parse, a column has no
@@ -144,15 +152,18 @@ public:
     }
 
 private:
-    // One policy copy per distinct parameter set, shared by every text checked with it.
-    const strict::FieldPolicy& PolicyWith(const std::string& params_key, const Params& params) {
+    // One policy copy per distinct parameter set, shared by every text checked with it. Null when two spellings
+    // that collide as parameter names carry different origins (FieldPolicy::SetParams). ParamsOf never yields
+    // that today: it gives every spelling of one binding the binding's origin, and a binding groups spellings by
+    // AllowlistKey, which folds at least what the parameter name normalization folds.
+    const strict::FieldPolicy* PolicyWith(const std::string& params_key, const Params& params) {
         auto it = policies_.find(params_key);
         if (it == policies_.end()) {
             auto policy = std::make_unique<strict::FieldPolicy>(policy_);
-            policy->SetParams(params);
+            if (!policy->SetParams(params)) policy.reset();
             it = policies_.emplace(params_key, std::move(policy)).first;
         }
-        return *it->second;
+        return it->second.get();
     }
 
     // Targets survive only when both sides are references (as for ОБЪЕДИНИТЬ in the query checker).

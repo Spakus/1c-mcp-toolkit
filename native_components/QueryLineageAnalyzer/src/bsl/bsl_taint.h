@@ -33,7 +33,8 @@
 //     to be built from the same walk.
 //   - A token literal written into a query text would need an inserted З.УстановитьПараметр("МСПТокен<n>",
 //     МСПЗначенияТокенов[n-1]) statement; the canonical printer replaces expressions only, so it is refused
-//     (C_TOKEN_IN_QUERY) and the client binds the token as a parameter value instead.
+//     (C_TOKEN_IN_QUERY) and the client binds the token as a parameter value instead. The refusal is code-only:
+//     CheckQuery (execute_query) prints such a literal as &МСПТокен<n> itself (check_query.h).
 //   - CheckQuery reports no value types: a column without reference targets may still hold a reference (ЕСТЬNULL,
 //     ОБЪЕДИНИТЬ, parameters), so a string conversion of such a column needs confirmation.
 

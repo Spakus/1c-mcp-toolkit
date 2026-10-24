@@ -323,6 +323,17 @@ private:
         result_.risks.push_back(CodeReason{"R_UNKNOWN_EFFECT", pos});
     }
 
+    // A use of a Запрос value the walk does not model (see "Lost queries" in bsl_types.h); a no-op on other types.
+    // `text`: the text may have changed too, so not even the column names are known.
+    void LoseQuery(const VType& v, bool text) {
+        if (v.ty == Ty::Query) LoseSite(v.site, text);
+    }
+
+    void LoseSite(const Expr* site, bool text) {
+        if (!site) return;
+        (text ? state_.untracked_queries : state_.unlabeled_queries).insert(site);
+    }
+
     // The environment key of a variable. Two spellings that differ only in ё / е are reported.
     std::string VarKey(const std::string& name, const Pos& pos) {
         const std::string key = AllowlistKey(name);
@@ -604,7 +615,10 @@ private:
     // the allocation assigned straight to a variable.
     VType Eval(const Expr& e, bool recv = false) {
         const VType t = EvalInner(e);
-        if (!recv && t.ty == Ty::Query) Add("C_QUERY_ESCAPES", e.pos);
+        if (!recv && t.ty == Ty::Query) {
+            Add("C_QUERY_ESCAPES", e.pos);
+            LoseQuery(t, true);
+        }
         return t;
     }
 
@@ -704,6 +718,7 @@ private:
         const auto it = T().properties.find({static_cast<int>(obj.ty), key});
         if (it == T().properties.end()) {
             Add("C_UNKNOWN_MEMBER", e.pos);
+            LoseQuery(obj, false);   // З.Параметры and any other member
             return VType();
         }
         return Typed(it->second->result, Fresh(ShapeOf(obj)));
@@ -782,6 +797,7 @@ private:
             }
             default:
                 Add("C_UNKNOWN_INDEX", pos);
+                LoseQuery(obj, false);
                 return false;
         }
     }
@@ -849,6 +865,7 @@ private:
         if (query) {
             v.site = &e;
             if (e.args.size() == 1) NoteQueryText(&e, *e.args[0]);
+            if (e.args.size() > 1) LoseSite(&e, true);   // C_BAD_ARGS: no text recorded
             return v;
         }
         if (rule->result == Ty::Uuid) {
@@ -882,6 +899,7 @@ private:
         QueryTextUse use;
         if (!Fold(text_expr, use.text)) {
             Add("C_DYNAMIC_QUERY", text_expr.pos);
+            LoseSite(site, true);   // the site's other texts do not describe this one
             return;
         }
         TokenBinding b;
@@ -921,6 +939,7 @@ private:
             if (it == T().methods.end()) {
                 Add("C_UNKNOWN_METHOD", e.pos);
                 AddUnknownEffect(e.pos);
+                LoseQuery(recv, false);
             } else {
                 rule = it->second;
             }
@@ -930,6 +949,7 @@ private:
         for (int i = 1; i <= nargs; ++i) args.push_back(out_param && i == 2 ? VType() : Eval(*e.args[i]));
         if (!rule) return VType();
         const bool arity = CheckArity(nargs, rule->min_args, rule->max_args, e.pos);
+        if (!arity) LoseQuery(recv, false);
         if (arity && rule->arg0 == ArgRule::LiteralString) {
             if (!IsStringLit(*e.args[1])) Add(rule->receiver == Ty::Query ? "C_DYNAMIC_PARAM" : "C_DYNAMIC_KEY", e.args[1]->pos);
             NameLiteral(*e.args[1]);
@@ -979,14 +999,31 @@ private:
 
     VType Executed(const VType& query) {
         VType v = Typed(Ty::QueryResult, IsTainted(query.label) ? query.label : Origin::Open);
-        if (options_.columns_for_query) v.columns = options_.columns_for_query(query.site);
+        if (!options_.columns_for_query || state_.untracked_queries.count(query.site)) return v;
+        v.columns = options_.columns_for_query(query.site);
+        if (v.columns && state_.unlabeled_queries.count(query.site)) {
+            auto unlabeled = std::make_shared<ColumnSet>(*v.columns);
+            for (auto& c : unlabeled->columns) {
+                c.second.origin = Origin::Unknown;
+                c.second.refs_known = false;
+            }
+            v.columns = std::move(unlabeled);
+        }
         return v;
     }
 
     void BindParam(const VType& query, const Expr& name_expr, const VType& value, const Pos& pos) {
-        if (!IsStringLit(name_expr)) return;   // C_DYNAMIC_PARAM already
+        if (!IsStringLit(name_expr)) {   // C_DYNAMIC_PARAM already
+            LoseQuery(query, false);
+            return;
+        }
+        // A name no query text can spell (a space, an invisible or look-alike character): the host may trim or fold
+        // it onto another parameter. Still bound, so that the parameter set fails the policy and no column keeps a
+        // label of the other spelling.
+        if (!strict::IsIdentifierName(name_expr.text)) Add("C_BAD_PARAM_NAME", pos);
         if (IsReservedParam(name_expr.text)) {
             Add("C_RESERVED", pos);
+            LoseQuery(query, false);   // not bound: the host may bind it with its own value
             return;
         }
         const Origin label = WithPc(ValueLabel(value));
@@ -1252,6 +1289,7 @@ private:
                 NoteQueryText(obj.site, value_expr);
             } else {
                 Add("C_UNKNOWN_MEMBER", target.pos);
+                LoseQuery(obj, false);
             }
         } else {
             const VType obj = Eval(*target.args[0], true);
@@ -1268,6 +1306,7 @@ private:
                 Add("C_UNKNOWN_RECEIVER", target.pos);
             } else {
                 Add("C_UNKNOWN_INDEX", target.pos);
+                LoseQuery(obj, false);
             }
         }
     }
@@ -1376,6 +1415,7 @@ private:
             Add("C_UNKNOWN_RECEIVER", s.exprs[0]->pos);
         } else {
             Add("C_UNKNOWN_ITER", s.exprs[0]->pos);
+            LoseQuery(coll, false);
         }
         const std::optional<Origin> shape = ShapeOf(coll);
         const Origin count = shape ? *shape : Origin::Open;

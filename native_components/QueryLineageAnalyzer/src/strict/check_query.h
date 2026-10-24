@@ -15,7 +15,17 @@
 // "incomplete" is never safe: retry with the missing tables, the retry's verdict decides.
 // The BSL caller must execute the canonical text with Запрос.Выполнить() (not ВыполнитьПакет): only the last
 // statement's result is labelled, so a non-final select without ПОМЕСТИТЬ, or a final УНИЧТОЖИТЬ, is Q_BATCH_RESULT.
-// A malformed policy is Q_POLICY_INVALID / confirm. Never throws: an internal failure is Q_INTERNAL / confirm.
+// A malformed policy is Q_POLICY_INVALID / confirm; so is a "params" name outside the alphabet of a parameter after
+// '&' (IsIdentifierName), since the host could bind it to another parameter after trimming or folding. Never throws: an internal failure is Q_INTERNAL / confirm.
+// Token literals: a string literal whose whole value is a token of the policy's "tokens" table (the format of
+// bsl::ParseTokenTable, matched as bsl::ClassifyTokenLiteral does) is checked and printed as the parameter
+// &МСПТокен<index+1>. The host binds the token's value to that parameter and executes the canonical text, so every
+// parameter МСПТокен<index+1> of the table, bound or written by hand, has the token's origin (protected ->
+// token_protected, unknown -> token_unknown); a "params" entry of that name (matched as parameter names are) must
+// carry the same origin, and one that differs is Q_POLICY_INVALID / confirm. A token parameter whose index the table
+// does not list keeps its "params" origin. A token inside a longer literal and a token-format literal missing from
+// the table stay literals; a malformed "tokens" table is Q_POLICY_INVALID / confirm. CheckQueryWithPolicy never
+// binds: a query text in client code keeps its literals.
 namespace lineage::strict {
 
 std::string CheckQueryImpl(const std::string& query_utf8, const std::string& policy_json);

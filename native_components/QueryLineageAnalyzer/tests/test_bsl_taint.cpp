@@ -862,3 +862,17 @@ TEST(BslTaint, ChainOnNewQuery) {
     // A chain that ends on the Запрос itself is an escape like any other use of it as a value.
     CHECK(Denied("Х = Новый Массив; Х.Добавить(Новый Запрос(\"ВЫБРАТЬ 1\")); Результат = 1;", "C_QUERY_ESCAPES"));
 }
+
+// A parameter name literal outside the alphabet of a parameter after '&' is refused, an open value included; a
+// mixed-script name inside it is not (the query text names another parameter: the query parser refuses mixed
+// scripts on its own).
+TEST(BslTaint, ParamNameOutsideTheParameterAlphabet) {
+    for (const char* name : {"П ", " П", "П\xC2\xA0", "\xE2\x80\x8BП", "", "1П", "П-1", "\xE2\x84\xAA"}) {
+        CHECK(Denied(std::string("З = Новый Запрос(\"ВЫБРАТЬ &П КАК А\"); З.УстановитьПараметр(\"") + name +
+                         "\", 1); Результат = З.Выполнить().Выгрузить();",
+                     "C_BAD_PARAM_NAME"));
+    }
+    CHECK(Safe("З = Новый Запрос(\"ВЫБРАТЬ &П КАК А\"); З.УстановитьПараметр(\"П\", 1); "
+               "З.УстановитьПараметр(\"ДатаUTC\", 1); "
+               "Результат = З.Выполнить().Выгрузить();"));
+}

@@ -5,6 +5,7 @@
 
 #include <nlohmann/json.hpp>
 
+#include "strict/strict_tokenizer.h"
 #include "utf_utils.h"
 
 namespace lineage::strict {
@@ -45,14 +46,33 @@ bool ParseParamOrigin(const Json& v, ParamOrigin* out) {
     return true;
 }
 
-int ParamStrictness(ParamOrigin o) {
-    switch (o) {
-        case ParamOrigin::TokenUnknown: return 3;
-        case ParamOrigin::Client: return 2;
-        case ParamOrigin::TokenProtected: return 1;
-        case ParamOrigin::Missing: return 0;
+// The collision key of a parameter name: the normalized key with the Cyrillic capital yo (U+0401) folded to the
+// capital ie (U+0415). The lookup key stays NormalizeIdentifierKey.
+std::string ParamCollisionKey(const std::string& normalized) {
+    std::string key = normalized;
+    for (size_t p = 0; p + 1 < key.size(); ++p) {
+        if (static_cast<unsigned char>(key[p]) == 0xD0 && static_cast<unsigned char>(key[p + 1]) == 0x81) {
+            key[p + 1] = static_cast<char>(0x95);
+        }
     }
-    return 3;
+    return key;
+}
+
+// Adds a parameter origin under its normalized name. Names that collide after normalization are one parameter to
+// the host, which binds whichever spelling it meets last: they must carry the same origin, false otherwise (no
+// origin is safe to keep, a client label over a protected value returns it unmasked). Names that differ only in yo /
+// ie are held to the same rule (`folds`, by ParamCollisionKey), whether or not the platform tells them apart. A
+// name outside the alphabet of a query parameter (IsIdentifierName) is false as well: no query text can name it,
+// and a host that trims or folds it would bind its value to another parameter. It is checked on the raw bytes,
+// before normalization drops any. False changes nothing.
+bool AddParam(std::map<std::string, ParamOrigin>& params, std::map<std::string, ParamOrigin>& folds,
+              const std::string& name, ParamOrigin origin) {
+    if (!IsIdentifierName(name)) return false;
+    const std::string key = NormalizeIdentifierKey(name);
+    const auto fold = folds.emplace(ParamCollisionKey(key), origin);
+    if (!fold.second && fold.first->second != origin) return false;
+    params.emplace(key, origin);
+    return true;
 }
 
 // Merges a field entry under an already used (normalized) name: the class can only get stricter.
@@ -184,13 +204,7 @@ private:
         for (auto it = params->begin(); it != params->end(); ++it) {
             ParamOrigin origin = ParamOrigin::Missing;
             if (!ParseParamOrigin(it.value(), &origin)) return false;
-            const std::string key = NormalizeIdentifierKey(it.key());
-            auto existing = policy->params_.find(key);
-            if (existing == policy->params_.end()) {
-                policy->params_.emplace(key, origin);
-            } else if (ParamStrictness(origin) > ParamStrictness(existing->second)) {
-                existing->second = origin;   // colliding names: the most distrusted origin wins
-            }
+            if (!AddParam(policy->params_, policy->param_folds_, it.key(), origin)) return false;
         }
         return true;
     }
@@ -224,17 +238,18 @@ ParamOrigin FieldPolicy::OriginOfParam(const std::string& name) const {
     return it == params_.end() ? ParamOrigin::Missing : it->second;
 }
 
-void FieldPolicy::SetParams(const std::map<std::string, ParamOrigin>& params) {
-    params_.clear();
+bool FieldPolicy::SetParams(const std::map<std::string, ParamOrigin>& params) {
+    std::map<std::string, ParamOrigin> normalized, folds;
     for (const auto& kv : params) {
-        const std::string key = NormalizeIdentifierKey(kv.first);
-        auto existing = params_.find(key);
-        if (existing == params_.end()) {
-            params_.emplace(key, kv.second);
-        } else if (ParamStrictness(kv.second) > ParamStrictness(existing->second)) {
-            existing->second = kv.second;
-        }
+        if (!AddParam(normalized, folds, kv.first, kv.second)) return false;
     }
+    params_ = std::move(normalized);
+    param_folds_ = std::move(folds);
+    return true;
+}
+
+bool FieldPolicy::AgreeParam(const std::string& name, ParamOrigin origin) {
+    return AddParam(params_, param_folds_, name, origin);
 }
 
 std::string FieldPolicy::ResolveVirtualBase(const std::string& vt) const {

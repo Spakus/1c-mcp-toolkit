@@ -1,10 +1,12 @@
 #include "strict/check_query.h"
 
 #include <cstddef>
+#include <string>
 #include <vector>
 
 #include <nlohmann/json.hpp>
 
+#include "bsl/bsl_taint.h"
 #include "strict/analyzer.h"
 #include "strict/ast_dump.h"
 #include "strict/canonical_printer.h"
@@ -90,14 +92,97 @@ QueryReason MakeQueryReason(const std::string& code, const Pos* pos) {
     return r;
 }
 
-QueryCheckResult Analyze(const std::string& query_utf8, const FieldPolicy& policy) {
+// The parameter that holds the value of the token at `index`, and its origin.
+std::string TokenParamName(int index) { return "МСПТокен" + std::to_string(index + 1); }
+
+ParamOrigin TokenParamOrigin(const bsl::TokenBinding& binding) {
+    return binding.origin == Origin::ProtectedDirect ? ParamOrigin::TokenProtected : ParamOrigin::TokenUnknown;
+}
+
+// Gives every parameter МСПТокен<index+1> of the table the origin of its token (see check_query.h). False if
+// "params" names one of them with another origin: the host binds the token's value there, and a different label
+// would relabel that value (a client label would return a protected value unmasked).
+bool AgreeTokenParams(const bsl::TokenTable& tokens, FieldPolicy& policy) {
+    for (const auto& kv : tokens) {
+        if (!policy.AgreeParam(TokenParamName(kv.second.index), TokenParamOrigin(kv.second))) return false;
+    }
+    return true;
+}
+
+// Turns every string literal whose whole value is an issued token into the parameter МСПТокен<index+1> (see
+// check_query.h). A token inside a longer literal, or a token-format literal the table does not list, stays a
+// literal.
+class TokenLiteralBinder {
+public:
+    explicit TokenLiteralBinder(const bsl::TokenTable& tokens) : tokens_(tokens) {}
+
+    void Run(Batch& batch) {
+        for (Statement& st : batch.statements) VisitSelect(st.select);
+    }
+
+private:
+    void VisitExpr(const ExprP& e) {
+        if (!e) return;
+        if (e->kind == Expr::K::StringLit) {
+            bsl::TokenBinding binding;
+            if (bsl::ClassifyTokenLiteral(e->text, &tokens_, &binding) == bsl::TokenUse::Bound) {
+                e->kind = Expr::K::Param;
+                e->text = TokenParamName(binding.index);
+            }
+            return;
+        }
+        for (const ExprP& arg : e->args) VisitExpr(arg);
+        VisitSelect(e->subquery);
+    }
+
+    void VisitList(const std::vector<ExprP>& list) {
+        for (const ExprP& e : list) VisitExpr(e);
+    }
+
+    void VisitSource(const Source& src) {
+        VisitList(src.vt_params);
+        VisitSelect(src.subquery);
+    }
+
+    void VisitSelect(const std::shared_ptr<Select>& s) {
+        if (!s) return;
+        for (const SelectItem& item : s->items) VisitExpr(item.expr);
+        for (const Source& src : s->from) VisitSource(src);
+        for (const std::vector<Join>& joins : s->joins) {
+            for (const Join& j : joins) {
+                VisitSource(j.source);
+                VisitExpr(j.on);
+            }
+        }
+        VisitExpr(s->where);
+        VisitList(s->group_by);
+        VisitExpr(s->having);
+        VisitList(s->index_by);
+        for (const Select::UnionPart& part : s->unions) VisitSelect(part.select);
+        for (const OrderItem& o : s->order_by) VisitExpr(o.expr);
+        VisitList(s->totals_aggregates);
+        for (const TotalsItem& t : s->totals_by) {
+            VisitExpr(t.expr);
+            VisitList(t.periods_args);
+        }
+    }
+
+    const bsl::TokenTable& tokens_;
+};
+
+// `tokens` is null on the path of query texts in client code: there a token literal stays a literal. Otherwise
+// `policy` already gives the token parameters their origins (AgreeTokenParams).
+QueryCheckResult Analyze(const std::string& query_utf8, const FieldPolicy& policy,
+                         const bsl::TokenTable* tokens = nullptr) {
     QueryCheckResult out;
-    const ParseResult parsed = ParseBatchStrict(query_utf8);
+    ParseResult parsed = ParseBatchStrict(query_utf8);
     if (!parsed.ok) {
         out.reasons.push_back(
             MakeQueryReason(parsed.error.code.empty() ? "Q_PARSE_ERROR" : parsed.error.code, &parsed.error.pos));
         return out;
     }
+
+    if (tokens && !tokens->empty()) TokenLiteralBinder(*tokens).Run(parsed.batch);
 
     const AnalysisResult analysis = AnalyzeQuery(parsed.batch, policy);
     for (const Reason& reason : analysis.reasons) out.reasons.push_back(MakeQueryReason(reason.code, &reason.pos));
@@ -157,9 +242,15 @@ std::string ToJson(const QueryCheckResult& r) {
 }
 
 std::string Check(const std::string& query_utf8, const std::string& policy_json) {
-    const FieldPolicy::Parsed policy = FieldPolicy::FromJson(policy_json);
+    FieldPolicy::Parsed policy = FieldPolicy::FromJson(policy_json);
     if (!policy.ok) return Reject("Q_POLICY_INVALID", nullptr);
-    return ToJson(Analyze(query_utf8, policy.policy));
+    // A malformed token table, or a token parameter that "params" labels otherwise than its token, is a malformed
+    // policy, as in CheckCode.
+    bsl::TokenTable tokens;
+    if (!bsl::ParseTokenTable(policy_json, tokens) || !AgreeTokenParams(tokens, policy.policy)) {
+        return Reject("Q_POLICY_INVALID", nullptr);
+    }
+    return ToJson(Analyze(query_utf8, policy.policy, &tokens));
 }
 
 }  // namespace

@@ -154,6 +154,17 @@ std::string FoldYo(std::string key) {
 
 }  // namespace
 
+bool IsIdentifierName(const std::string& name) {
+    size_t i = IdentStartLen(name, 0);
+    if (i == 0) return false;
+    while (i < name.size()) {
+        const size_t n = IdentPartLen(name, i);
+        if (n == 0) return false;
+        i += n;
+    }
+    return true;
+}
+
 const char* CanonicalKeyword(Kw kw) {
     for (const auto& e : kKeywords) {
         if (e.kw == kw) return e.ru;

@@ -3,6 +3,7 @@
 #include <cstdlib>
 #include <iostream>
 #include <string>
+#include <utility>
 
 #include "bsl/bsl_types.h"
 #include "bsl/check_code.h"
@@ -89,6 +90,17 @@ TEST(CheckCode, NotLoadedPolicyFailsClosed) {
     CHECK_EQ(Verdict(j), std::string("confirm"));
     CHECK(HasReason(j, "C_POLICY_INVALID"));
     CHECK(j["canonical"].get<std::string>().empty());
+    CHECK(HasRisk(j, "R_UNKNOWN_EFFECT"));
+}
+
+// The code checker reads the same policy: "params" spellings colliding up to case with different origins make it
+// malformed there too, though the code sets its own parameters.
+TEST(CheckCode, CollidingParamOriginsArePolicyInvalid) {
+    Json policy = Json::parse(kPolicyABJson);
+    policy["params"] = Json::parse(R"({"пар": "client", "Пар": "token_protected"})");
+    const Json j = Check("Результат = 1;", policy.dump());
+    CHECK_EQ(Verdict(j), std::string("confirm"));
+    CHECK(HasReason(j, "C_POLICY_INVALID"));
     CHECK(HasRisk(j, "R_UNKNOWN_EFFECT"));
 }
 
@@ -316,4 +328,168 @@ TEST(CheckCode, InvalidBodyHasUnknownRoot) {
     CHECK_EQ(r.result_labels.size(), static_cast<size_t>(1));
     CHECK_EQ(r.result_labels[0].label, std::string("unknown"));
     CHECK(!r.result_reasons.empty());
+}
+
+// A parameter name literal no query text can spell (a space, an invisible or look-alike character, empty, a digit
+// first) is refused: the host may trim or fold it onto the clean spelling and bind the protected value there. The
+// column of the clean parameter never keeps the client label of its other binding.
+TEST(CheckCode, ParamNameOutsideTheParameterAlphabetIsConfirm) {
+    const std::pair<const char*, const char*> cases[] = {
+        {"Пар", "Пар "},
+        {"Пар", " Пар"},
+        {"Пар", "Пар\xC2\xA0"},
+        {"Пар", "Па\xE2\x80\x8Bр"},
+        {"ПаВ", "Па\xE1\xB2\x80"},
+        {"Sum", "\xC5\xBFum"},
+        {"ID", "\xC4\xB1" "d"},
+        {"k", "\xE2\x84\xAA"},
+        {"Пар", ""},
+        {"Пар", "1Пар"},
+    };
+    for (const auto& c : cases) {
+        const std::string code = std::string(
+            "З = Новый Запрос(\"ВЫБРАТЬ А.Имя КАК Имя ИЗ Справочник.А КАК А\");\n"
+            "В = З.Выполнить().Выбрать();\nВ.Следующий();\n"
+            "З2 = Новый Запрос(\"ВЫБРАТЬ &") + c.first + " КАК Х\");\n"
+            "З2.УстановитьПараметр(\"" + c.first + "\", 1);\n"
+            "З2.УстановитьПараметр(\"" + c.second + "\", В.Имя);\n"
+            "Результат = З2.Выполнить().Выгрузить();\n";
+        const Json j = Check(code);
+        CHECK_EQ(Verdict(j), std::string("confirm"));
+        CHECK(HasReason(j, "C_BAD_PARAM_NAME"));
+        CHECK(Label(j, "$[*].Х") != std::string("client"));
+    }
+}
+
+// Mixed scripts inside the parameter alphabet are a legitimate parameter name (a query text naming it is refused by
+// the query parser's own mixed-script rule, so the text below names another parameter).
+TEST(CheckCode, MixedScriptParamNameIsSafe) {
+    const Json j = Check(
+        "З = Новый Запрос(\"ВЫБРАТЬ &Пар КАК Х\");\n"
+        "З.УстановитьПараметр(\"Пар\", 1);\n"
+        "З.УстановитьПараметр(\"ДатаНачалаUTC\", 1);\n"
+        "Результат = З.Выполнить().Выгрузить();\n");
+    CHECK_EQ(Verdict(j), std::string("safe"));
+    CHECK(!HasReason(j, "C_BAD_PARAM_NAME"));
+    CHECK_EQ(Label(j, "$[*].Х"), std::string("client"));
+}
+
+namespace {
+
+// A query reading the protected Имя, its first row in В, and a second query З2 (by default its only column is the
+// parameter &Пар); `setters` follow, then З2's result is the Результат.
+std::string LostQueryCode(const std::string& setters, const char* text = "\"ВЫБРАТЬ &Пар КАК Х\"") {
+    return std::string(
+               "З = Новый Запрос(\"ВЫБРАТЬ А.Имя КАК Имя ИЗ Справочник.А КАК А\");\n"
+               "В = З.Выполнить().Выбрать();\nВ.Следующий();\n"
+               "З2 = Новый Запрос(") +
+           text + ");\n" + setters + "Результат = З2.Выполнить().Выгрузить();\n";
+}
+
+}  // namespace
+
+// The control of the tests below: the parameter bound once with a literal is a client column.
+TEST(CheckCode, LiteralParameterIsClient) {
+    const Json j = Check(LostQueryCode("З2.УстановитьПараметр(\"Пар\", 1);\n"));
+    CHECK_EQ(Verdict(j), std::string("safe"));
+    CHECK_EQ(Label(j, "$[*].Х"), std::string("client"));
+}
+
+// A parameter binding the walk cannot follow (a name that is not a literal, the Параметры collection, any member,
+// method, index or iteration not modelled on Запрос, a wrong argument count, a reserved name) is a reason, and every
+// column of that query's results is unknown: a confirmed run must not return the protected value under the client
+// label of the literal binding.
+TEST(CheckCode, UnfollowedParameterBindingMakesColumnsUnknown) {
+    const std::pair<const char*, const char*> cases[] = {
+        {"Н = \"Пар\";\nЗ2.УстановитьПараметр(Н, В.Имя);\n", "C_DYNAMIC_PARAM"},
+        {"З2.УстановитьПараметр(\"Па\" + \"р\", В.Имя);\n", "C_DYNAMIC_PARAM"},
+        {"З2.SetParameter(\"Па\" + \"р\", В.Имя);\n", "C_DYNAMIC_PARAM"},
+        {"З2.Параметры[\"Пар\"] = В.Имя;\n", "C_UNKNOWN_MEMBER"},
+        {"З2.Параметры.Пар = В.Имя;\n", "C_UNKNOWN_MEMBER"},
+        {"З2.Параметры.Вставить(\"Пар\", В.Имя);\n", "C_UNKNOWN_MEMBER"},
+        {"З2.Parameters.Insert(\"Пар\", В.Имя);\n", "C_UNKNOWN_MEMBER"},
+        {"З2.УстановитьПараметр(\"Пар\", В.Имя, 1);\n", "C_BAD_ARGS"},
+        {"З2.УстановитьПараметр(\"МСПТокен1\", В.Имя);\n", "C_RESERVED"},
+        {"З2.НайтиПараметры();\n", "C_UNKNOWN_METHOD"},
+        {"З2[\"Пар\"] = В.Имя;\n", "C_UNKNOWN_INDEX"},
+        {"Т = З2[0];\n", "C_UNKNOWN_INDEX"},
+        {"З2.Пар = В.Имя;\n", "C_UNKNOWN_MEMBER"},
+        {"Т = З2.Текст;\n", "C_UNKNOWN_MEMBER"},
+    };
+    for (const auto& c : cases) {
+        const Json j = Check(LostQueryCode(std::string("З2.УстановитьПараметр(\"Пар\", 1);\n") + c.first));
+        CHECK_EQ(Verdict(j), std::string("confirm"));
+        CHECK(HasReason(j, c.second));
+        CHECK_EQ(Label(j, "$[*]"), std::string("container"));
+        CHECK_EQ(Label(j, "$[*].Х"), std::string("unknown"));
+    }
+}
+
+// The same for a query allocated without a text, a query executed before the binding the walk cannot follow (the
+// fixpoint relabels the earlier result too), and a column read from a row of the result.
+TEST(CheckCode, UnfollowedParameterBindingVariants) {
+    const char* const head =
+        "З = Новый Запрос(\"ВЫБРАТЬ А.Имя КАК Имя ИЗ Справочник.А КАК А\");\n"
+        "В = З.Выполнить().Выбрать();\nВ.Следующий();\n"
+        "З2 = Новый Запрос(\"ВЫБРАТЬ &Пар КАК Х\");\nЗ2.УстановитьПараметр(\"Пар\", 1);\n";
+    {
+        const Json j = Check(LostQueryCode(
+            "З2.Текст = \"ВЫБРАТЬ &Пар КАК Х\";\nЗ2.УстановитьПараметр(\"Пар\", 1);\nЗ2.Параметры.Пар = В.Имя;\n", ""));
+        CHECK_EQ(Verdict(j), std::string("confirm"));
+        CHECK_EQ(Label(j, "$[*].Х"), std::string("unknown"));
+    }
+    {
+        const Json j = Check(std::string(head) +
+                             "Р = З2.Выполнить().Выгрузить();\nЗ2.Параметры.Пар = В.Имя;\nРезультат = Р;\n");
+        CHECK_EQ(Verdict(j), std::string("confirm"));
+        CHECK_EQ(Label(j, "$[*].Х"), std::string("unknown"));
+    }
+    {
+        const Json j = Check(std::string(head) +
+                             "З2.Параметры.Пар = В.Имя;\nВ2 = З2.Выполнить().Выбрать();\nВ2.Следующий();\n"
+                             "Результат = Новый Структура(\"К\", В2.Х);\n");
+        CHECK_EQ(Verdict(j), std::string("confirm"));
+        CHECK_EQ(Label(j, "$.К"), std::string("unknown"));
+    }
+}
+
+// A query whose text or object the walk loses (a text that is not constant-folded, a copy into another variable, a
+// collection or an argument) has no known columns: the whole result is unknown.
+TEST(CheckCode, LostQueryTextOrObjectMakesResultUnknown) {
+    const std::pair<const char*, const char*> cases[] = {
+        {"Т = \"ВЫБРАТЬ А.Имя КАК Х ИЗ Справочник.А КАК А\";\nЗ2.Текст = Т;\n", "C_DYNAMIC_QUERY"},
+        {"З3 = З2;\nЗ3.УстановитьПараметр(\"Пар\", В.Имя);\n", "C_QUERY_ESCAPES"},
+        {"С = Новый Структура(\"З\", З2);\n", "C_QUERY_ESCAPES"},
+        {"М = Новый Массив;\nМ.Добавить(З2);\n", "C_QUERY_ESCAPES"},
+        {"МойМодуль.Заполнить(З2, В.Имя);\n", "C_QUERY_ESCAPES"},
+    };
+    for (const auto& c : cases) {
+        const Json j = Check(LostQueryCode(std::string("З2.УстановитьПараметр(\"Пар\", 1);\n") + c.first));
+        CHECK_EQ(Verdict(j), std::string("confirm"));
+        CHECK(HasReason(j, c.second));
+        CHECK_EQ(Label(j, "$"), std::string("unknown"));
+        CHECK_EQ(Label(j, "$[*].Х"), std::string("<none>"));
+    }
+}
+
+// Two bindings whose names differ only in yo / ie are one binding to the code checker, whichever the platform does:
+// its label joins both values, so the column is not client.
+TEST(CheckCode, YoVariantParameterBindingsJoin) {
+    const Json j = Check(LostQueryCode("З2.УстановитьПараметр(\"Еж\", 1);\nЗ2.УстановитьПараметр(\"Ёж\", В.Имя);\n",
+                                       "\"ВЫБРАТЬ &Еж КАК Х\""));
+    CHECK_EQ(Verdict(j), std::string("confirm"));
+    CHECK_EQ(Label(j, "$[*].Х"), std::string("unknown"));
+}
+
+// "params" spellings differing only in yo / ie with different origins make the policy malformed for the code checker
+// too; the same origin is fine.
+TEST(CheckCode, YoCollidingParamOriginsArePolicyInvalid) {
+    Json policy = Json::parse(kPolicyABJson);
+    policy["params"] = Json::parse(R"({"Еж": "client", "Ёж": "token_protected"})");
+    const Json j = Check("Результат = 1;", policy.dump());
+    CHECK_EQ(Verdict(j), std::string("confirm"));
+    CHECK(HasReason(j, "C_POLICY_INVALID"));
+    policy["params"] = Json::parse(R"({"Еж": "client", "ёж": "client"})");
+    const Json same = Check("Результат = 1;", policy.dump());
+    CHECK_EQ(Verdict(same), std::string("safe"));
 }
