@@ -80,55 +80,99 @@ bool HasUnlabelledResult(const Batch& batch) {
     return false;
 }
 
-std::string Check(const std::string& query_utf8, const std::string& policy_json) {
-    const FieldPolicy::Parsed policy = FieldPolicy::FromJson(policy_json);
-    if (!policy.ok) return Reject("Q_POLICY_INVALID", nullptr);
+QueryReason MakeQueryReason(const std::string& code, const Pos* pos) {
+    QueryReason r;
+    r.code = code;
+    if (pos) {
+        r.has_pos = true;
+        r.pos = *pos;
+    }
+    return r;
+}
 
+QueryCheckResult Analyze(const std::string& query_utf8, const FieldPolicy& policy) {
+    QueryCheckResult out;
     const ParseResult parsed = ParseBatchStrict(query_utf8);
-    if (!parsed.ok) return Reject(parsed.error.code.empty() ? "Q_PARSE_ERROR" : parsed.error.code, &parsed.error.pos);
+    if (!parsed.ok) {
+        out.reasons.push_back(
+            MakeQueryReason(parsed.error.code.empty() ? "Q_PARSE_ERROR" : parsed.error.code, &parsed.error.pos));
+        return out;
+    }
 
-    const AnalysisResult analysis = AnalyzeQuery(parsed.batch, policy.policy);
-    Json out = Skeleton();
-    for (const Reason& reason : analysis.reasons) out["reasons"].push_back(MakeReason(reason.code, &reason.pos));
-    for (const std::string& table : analysis.missing_tables) out["missing_tables"].push_back(table);
+    const AnalysisResult analysis = AnalyzeQuery(parsed.batch, policy);
+    for (const Reason& reason : analysis.reasons) out.reasons.push_back(MakeQueryReason(reason.code, &reason.pos));
+    out.missing_tables = analysis.missing_tables;
 
     bool safe = analysis.verdict == Verdict::Safe && analysis.reasons.empty() && analysis.missing_tables.empty() &&
                 analysis.resolution_issues.empty();
 
     if (HasUnlabelledResult(parsed.batch)) {
         safe = false;
-        out["reasons"].push_back(MakeReason("Q_BATCH_RESULT", nullptr));
+        out.reasons.push_back(MakeQueryReason("Q_BATCH_RESULT", nullptr));
     }
 
     const PrintResult printed = PrintCanonicalChecked(parsed.batch);
     if (printed.ok) {
-        out["canonical"] = printed.text;
+        out.canonical = printed.text;
     } else {
         safe = false;
-        out["reasons"].push_back(MakeReason(printed.error.code.empty() ? "Q_PRINT_FAILED" : printed.error.code,
-                                            &printed.error.pos));
+        out.reasons.push_back(
+            MakeQueryReason(printed.error.code.empty() ? "Q_PRINT_FAILED" : printed.error.code, &printed.error.pos));
     }
 
+    out.parsed = true;
     const std::vector<std::string> names = FinalColumnNames(parsed.batch, analysis);
     for (size_t i = 0; i < analysis.columns.size(); ++i) {
-        Json column = Json::object();
-        column["name"] = i < names.size() ? names[i] : analysis.columns[i].name;
-        column["origin"] = OriginName(analysis.columns[i].origin);
-        column["direct"] = analysis.columns[i].origin == Origin::ProtectedDirect;
-        out["columns"].push_back(column);
+        ColumnLabel column = analysis.columns[i];
+        if (i < names.size()) column.name = names[i];
+        out.columns.push_back(std::move(column));
     }
 
     if (safe) {
-        out["verdict"] = "safe";
+        out.verdict = "safe";
     } else if (!analysis.missing_tables.empty()) {
-        out["verdict"] = "incomplete";
+        out.verdict = "incomplete";
     } else {
-        out["verdict"] = "confirm";
+        out.verdict = "confirm";
     }
+    return out;
+}
+
+std::string ToJson(const QueryCheckResult& r) {
+    Json out = Skeleton();
+    for (const QueryReason& reason : r.reasons) {
+        out["reasons"].push_back(MakeReason(reason.code, reason.has_pos ? &reason.pos : nullptr));
+    }
+    for (const std::string& table : r.missing_tables) out["missing_tables"].push_back(table);
+    out["canonical"] = r.canonical;
+    for (const ColumnLabel& label : r.columns) {
+        Json column = Json::object();
+        column["name"] = label.name;
+        column["origin"] = OriginName(label.origin);
+        column["direct"] = label.origin == Origin::ProtectedDirect;
+        out["columns"].push_back(column);
+    }
+    out["verdict"] = r.verdict;
     return Dump(out);
 }
 
+std::string Check(const std::string& query_utf8, const std::string& policy_json) {
+    const FieldPolicy::Parsed policy = FieldPolicy::FromJson(policy_json);
+    if (!policy.ok) return Reject("Q_POLICY_INVALID", nullptr);
+    return ToJson(Analyze(query_utf8, policy.policy));
+}
+
 }  // namespace
+
+QueryCheckResult CheckQueryWithPolicy(const std::string& query_utf8, const FieldPolicy& policy) {
+    try {
+        return Analyze(query_utf8, policy);
+    } catch (...) {
+        QueryCheckResult r;
+        r.reasons.push_back(MakeQueryReason("Q_INTERNAL", nullptr));
+        return r;
+    }
+}
 
 std::string CheckQueryImpl(const std::string& query_utf8, const std::string& policy_json) {
     try {

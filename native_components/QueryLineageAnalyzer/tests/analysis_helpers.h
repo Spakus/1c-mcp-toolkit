@@ -1,10 +1,12 @@
 #pragma once
 #include <cstring>
+#include <memory>
 #include <string>
 
 #include "strict/analyzer.h"
 #include "strict/field_policy.h"
 #include "bsl/bsl_parser.h"
+#include "bsl/bsl_taint.h"
 #include "bsl/bsl_types.h"
 #include "strict/strict_parser.h"
 
@@ -37,17 +39,24 @@ inline bool HasIssue(const AnalysisResult& r, const char* code) {
     return false;
 }
 
-// Parses client code and runs the type/allowlist pass. A parse error becomes a result carrying the parser's reason
-// code (C_EVAL, C_RESERVED, ...). The policy is not consulted yet: Task 25 hands query texts to CheckQuery with it.
-inline bsl::CodeAnalysis CheckCodeForTest(const FieldPolicy&, const std::string& code,
-                                          const bsl::TypeCheckOptions& options = bsl::TypeCheckOptions()) {
-    const bsl::ParseResult parsed = bsl::ParseBsl(code);
-    if (!parsed.ok) {
-        bsl::CodeAnalysis r;
-        r.reasons.push_back(bsl::CodeReason{parsed.error.code, parsed.error.pos});
-        return r;
+// The analysis together with the parsed body its Expr* keys (query_texts, bound_tokens, query_canonical) point into.
+struct CodeCheck : bsl::CodeAnalysis {
+    std::shared_ptr<const bsl::ParseResult> parsed;
+};
+
+// Parses client code and runs the taint pass (types, labels, CheckQuery of every query text with `policy`). A parse
+// error becomes a result carrying the parser's reason code (C_EVAL, C_RESERVED, ...).
+inline CodeCheck CheckCodeForTest(const FieldPolicy& policy, const std::string& code,
+                                  const bsl::TokenTable& tokens = bsl::TokenTable()) {
+    auto parsed = std::make_shared<bsl::ParseResult>(bsl::ParseBsl(code));
+    CodeCheck r;
+    if (!parsed->ok) {
+        r.reasons.push_back(bsl::CodeReason{parsed->error.code, parsed->error.pos});
+    } else {
+        static_cast<bsl::CodeAnalysis&>(r) = bsl::AnalyzeCode(parsed->body, policy, tokens);
     }
-    return bsl::AnalyzeCodeTypes(parsed.body, options);
+    r.parsed = std::move(parsed);
+    return r;
 }
 
 inline bool HasCodeReason(const bsl::CodeAnalysis& r, const char* code) {

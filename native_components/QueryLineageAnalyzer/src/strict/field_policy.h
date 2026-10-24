@@ -38,6 +38,10 @@ public:
     ParamOrigin OriginOfParam(const std::string& name) const;       // name without '&'
     std::string ResolveVirtualBase(const std::string& vt) const;    // "" if not virtual
 
+    // Replaces every parameter origin (names normalized as in the JSON; colliding names keep the most distrusted
+    // origin). The code checker uses it: a query built in client code knows only the parameters the code sets.
+    void SetParams(const std::map<std::string, ParamOrigin>& params);
+
     struct TableData {
         FieldClass presentation = FieldClass::Protected;
         std::map<std::string, FieldInfo> fields;

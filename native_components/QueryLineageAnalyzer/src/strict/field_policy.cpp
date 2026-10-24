@@ -224,6 +224,19 @@ ParamOrigin FieldPolicy::OriginOfParam(const std::string& name) const {
     return it == params_.end() ? ParamOrigin::Missing : it->second;
 }
 
+void FieldPolicy::SetParams(const std::map<std::string, ParamOrigin>& params) {
+    params_.clear();
+    for (const auto& kv : params) {
+        const std::string key = NormalizeIdentifierKey(kv.first);
+        auto existing = params_.find(key);
+        if (existing == params_.end()) {
+            params_.emplace(key, kv.second);
+        } else if (ParamStrictness(kv.second) > ParamStrictness(existing->second)) {
+            existing->second = kv.second;
+        }
+    }
+}
+
 std::string FieldPolicy::ResolveVirtualBase(const std::string& vt) const {
     const auto it = virtuals_.find(NormalizeIdentifierKey(vt));
     return it == virtuals_.end() ? std::string() : it->second.base;

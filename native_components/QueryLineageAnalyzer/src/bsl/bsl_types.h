@@ -2,35 +2,59 @@
 #include <functional>
 #include <map>
 #include <memory>
+#include <optional>
+#include <set>
 #include <string>
 #include <vector>
 
 #include "bsl/bsl_allowlist.h"
 #include "bsl/bsl_ast.h"
+#include "strict/field_policy.h"
+#include "strict/origin.h"
 
-// Symbol and type tracking of the strict BSL checker (plan Task 24). AnalyzeCodeTypes walks a validated AST and
+// Symbol and type tracking of the strict BSL checker (plan Task 24). AnalyzeCodeWalk walks a validated AST and
 // proves, for every identifier, global function, "Новый" type, member, method and index, that it is on the
 // allowlist (bsl_allowlist.h) and that the receiver's type is KNOWN. Anything else is a reason code (the list is
-// in the comment of CodeAnalysis) and the verdict is Confirm. Safe means "no reason", nothing more: taint, implicit
-// flow, query checking and risk classes are Tasks 25-27.
+// in the comment of CodeAnalysis) and the verdict is Confirm. The same walk carries the origin labels of the taint
+// pass (Task 25): bsl_taint.h drives it to a fixpoint and hands the query texts to CheckQuery. Risk classes and the
+// Результат labels are Tasks 26-27.
 //
 // Soundness rules (a type that cannot be proven is Unknown, and nothing is allowed on Unknown):
 //   - the walk is flow-sensitive; branches (Если, ?(), И / ИЛИ, Попытка) join their environments, and two
 //     different types join to Unknown;
 //   - a variable assigned on only one path is "maybe unassigned"; reading it is C_UNKNOWN_IDENT, because on the
 //     other path the name could resolve to a module variable of the host;
-//   - a loop is not iterated to a fixpoint: every variable assigned anywhere in the loop (including the loop
-//     variable and out-parameters) is Unknown, and maybe unassigned, at the loop head and after the loop, so a
-//     type carried from one iteration into the next cannot be assumed; the same holds for the Исключение block
-//     of Попытка (it may start after any statement of the body);
+//   - a loop is iterated to a fixpoint: at the loop head and after the loop, every variable assigned anywhere in the
+//     loop (including the loop variable and out-parameters) holds the join of its value before the loop and of
+//     EVERY value assigned to it in the loop, wherever the assignment is (so Прервать / Продолжить need no
+//     separate states); a variable the loop assigns but that was unassigned before it is maybe unassigned there;
+//     the Исключение block of Попытка starts from the same kind of join over the Попытка body;
 //   - a collection element and the result of an unknown call are Unknown;
 //   - a Запрос object may only be used as the receiver of a call or of a Текст assignment: copying it into
 //     another variable, a collection or an argument is C_QUERY_ESCAPES, so a text change can never reach an object
 //     the checker did not associate with its allocation site;
 //   - names are matched case-insensitively with ё = е; two variable spellings that differ only in ё / е are
 //     C_AMBIGUOUS_IDENT, so the result does not depend on whether the platform treats them as one name.
+//
+// Label rules (Task 25; the lattice is lineage::strict::Origin, the same as the query checker's):
+//   - literals are Client; a whole string literal equal to an issued token is that token's origin (ProtectedDirect
+//     or Unknown) and is printed as МСПЗначенияТокенов[n]; a query column has its CheckQuery label; a dereferenced
+//     attribute (Ссылка.Имя) has its policy class; anything the walk cannot label is Unknown;
+//   - a value moved (assigned, stored in a collection, read back) keeps its label; any other operation over a
+//     tainted input is C_FUNC_OVER_PROTECTED and its result is Transform(Join(inputs));
+//   - a reference read as a string (Строка, Формат, Лев, ..., "x" + Ссылка) is labelled with the presentation class
+//     of its targets; a value of unknown type may be a reference with unknown targets, so its presentation is
+//     Unknown;
+//   - pc: under a branch, loop, ?() or right-hand side of И / ИЛИ conditioned on a tainted value (and in the
+//     Исключение block after a tainted operation), every assignment, collection mutation and parameter binding is
+//     joined with the condition's label, and the construct is C_IMPLICIT_FLOW; a Прервать / Продолжить under such a
+//     pc taints the rest of the loop and the values the loop leaves;
+//   - .Количество(), Свойство() and the iteration of a collection read its shape label (the pc of its mutations),
+//     not its contents; the row count of a query result is open (an accepted residual leak of the query path).
 
 namespace lineage::bsl {
+
+using strict::Origin;
 
 // Allowlist key: upper case, ё folded to е. The same normalisation as NormalizeIdentifierKey plus the ё fold that
 // IsReservedName applies.
@@ -38,7 +62,8 @@ std::string AllowlistKey(const std::string& name);
 
 struct ColumnInfo {
     std::vector<std::string> refs;   // target tables when the column holds a reference (non-empty => Ty::Ref)
-    bool operator==(const ColumnInfo& o) const { return refs == o.refs; }
+    Origin origin = Origin::Unknown; // label of the column's values (CheckQuery)
+    bool operator==(const ColumnInfo& o) const { return refs == o.refs && origin == o.origin; }
 };
 
 // Columns of a query result / value table / row, keyed by AllowlistKey. Immutable once built.
@@ -47,11 +72,58 @@ struct ColumnSet {
     bool operator==(const ColumnSet& o) const { return columns == o.columns; }
 };
 
+// A token the host issued, as the policy's "tokens" table lists it (bsl_taint.h parses it). The table holds tokens
+// and origins only, never the real values; the canonical code reads the value as МСПЗначенияТокенов[index].
+struct TokenBinding {
+    int index = -1;                  // 0-based position in the bound-value array
+    Origin origin = Origin::Unknown; // ProtectedDirect ("protected") or Unknown ("unknown")
+    bool operator==(const TokenBinding& o) const { return index == o.index && origin == o.origin; }
+};
+using TokenTable = std::map<std::string, TokenBinding>;   // key: the token text with ASCII letters in upper case
+
 struct TypeCheckOptions {
     // Column labels of the query allocated at `site` (the "Новый Запрос" node), called at Запрос.Выполнить().
-    // Task 25 supplies it from CheckQuery. Without it (or when it returns null) the columns are unknown and a
-    // column read is C_UNKNOWN_MEMBER.
+    // The taint driver supplies it from CheckQuery. Without it (or when it returns null) the columns are unknown
+    // and a column read is C_UNKNOWN_MEMBER.
     std::function<std::shared_ptr<const ColumnSet>(const Expr* site)> columns_for_query;
+    // Presentation classes and dereferenced fields of references. Null: presentations are Unknown and a
+    // dereference is C_UNKNOWN_MEMBER.
+    const strict::FieldPolicy* policy = nullptr;
+    // Issued tokens. Null: no literal is bound, and a token-format literal is C_TOKEN_UNKNOWN.
+    const TokenTable* tokens = nullptr;
+    // Work counter shared by every walk of one analysis (statements plus environment entries copied); over
+    // kMaxCodeWork the walk stops with C_LIMIT. Null: each walk counts on its own.
+    size_t* work = nullptr;
+};
+
+constexpr size_t kMaxCodeWork = 500000;   // well under a second; ordinary client code uses a few percent
+
+// Flow-insensitive part of the label pass, joined monotonically over the whole program: collections can be
+// aliased (Д = М, Результат = М before М.Добавить), so their contents live per allocation site, not per variable.
+// An empty optional is "nothing stored yet".
+struct ObjectLabels {
+    std::optional<Origin> content;       // values stored in the collection (nested collections included)
+    std::optional<Origin> shape;         // pc of every mutation: what its size and key set depend on
+    std::optional<Origin> keys;          // Соответствие keys
+    std::set<std::string> refs;          // reference targets among the stored values
+    bool ref_unknown = false;            // a stored value may be a reference with unknown targets
+    std::set<const Expr*> nested;        // collections stored in it
+    bool operator==(const ObjectLabels& o) const {
+        return content == o.content && shape == o.shape && keys == o.keys && refs == o.refs &&
+               ref_unknown == o.ref_unknown && nested == o.nested;
+    }
+};
+
+struct ParamBinding {
+    Origin label = Origin::Open;         // join of every value the code binds to the parameter
+    std::set<std::string> spellings;     // names as written (ё kept), for the policy lookup of the query check
+    bool operator==(const ParamBinding& o) const { return label == o.label && spellings == o.spellings; }
+};
+
+struct LabelState {
+    std::map<const Expr*, ObjectLabels> objects;                         // key: the allocating expression
+    std::map<const Expr*, std::map<std::string, ParamBinding>> params;   // Запрос site -> AllowlistKey(name)
+    bool operator==(const LabelState& o) const { return objects == o.objects && params == o.params; }
 };
 
 struct CodeReason {
@@ -70,6 +142,9 @@ struct QueryTextUse {
 
 enum class CodeVerdict { Safe, Confirm };
 
+// "Tainted" labels: ProtectedDirect, ProtectedDerived, Mixed and Unknown.
+inline bool IsTainted(Origin o) { return o != Origin::Open && o != Origin::Client; }
+
 // Reasons (all positions are in the client's own text; no value is ever echoed):
 //   C_UNKNOWN_IDENT   name not assigned on every path and not allowlisted; also an unknown global function
 //   C_COMMON_MODULE   "Имя.Метод(...)" on an unassigned name that is not a context name (a module call)
@@ -86,14 +161,35 @@ enum class CodeVerdict { Safe, Confirm };
 //   C_BAD_ARGS        argument count outside the allowlisted range, or a malformed out-parameter
 //   C_QUERY_ESCAPES   a Запрос value used other than as a receiver
 //   C_AMBIGUOUS_IDENT variable spellings that differ only in ё / е
-//   C_LIMIT / C_PARSE a tree that fails ValidateBody (hand-built trees)
+//   C_LIMIT / C_PARSE a tree that fails ValidateBody (hand-built trees); C_LIMIT also when the walk or the fixpoint
+//                     runs out of budget
+//   C_RESERVED        a query parameter name in the МСПТокен namespace (set by the code or used in a query text)
+// Taint (Task 25):
+//   C_FUNC_OVER_PROTECTED  an operation whose input is tainted: an operator (arithmetic, concatenation, comparison,
+//                     И / ИЛИ / НЕ), an allowlisted function or method, a key or an index, a dereference of a
+//                     tainted reference; also a reference read as a string unless every target's presentation is open
+//   C_IMPLICIT_FLOW   a branch, loop, ?() or И / ИЛИ conditioned on a tainted value, and a Попытка whose body runs
+//                     an operation over tainted data (the Исключение block depends on it)
+//   C_TAINTED_KEY     a tainted key inserted into a Соответствие / Структура, or any key inserted next to tainted
+//                     keys (the de-duplication compares them)
+//   C_TOKEN_IN_STRING a token inside a longer string (a transformation of a token)
+//   C_TOKEN_UNKNOWN   a token-format string the policy's token table does not list
+//   C_TOKEN_AS_NAME   a token used as a name (parameter, key, column, type), not as a value
+//   C_TOKEN_IN_QUERY  a token in a query text (in code only a token bound with УстановитьПараметр is supported)
+//   Q_*               a reason of CheckQuery for a query text, at the position of that text in the code
 struct CodeAnalysis {
     CodeVerdict verdict = CodeVerdict::Confirm;   // fail closed: Safe only on a clean pass
     std::vector<CodeReason> reasons;
     std::vector<CodeReason> risks;                // filled by Task 26
-    std::vector<QueryTextUse> query_texts;
+    std::vector<QueryTextUse> query_texts;        // one entry per text expression
+    std::set<std::string> missing_tables;         // tables the policy lacks (the host may retry with them)
+    std::map<const Expr*, int> bound_tokens;      // string literals bound to issued tokens (PrintOptions)
+    std::map<const Expr*, std::string> query_canonical;   // text expression -> canonical query text (PrintOptions)
+    Origin result_label = Origin::Unknown;        // label of Результат at the end, contents included
 };
 
-CodeAnalysis AnalyzeCodeTypes(const Body& body, const TypeCheckOptions& options = TypeCheckOptions());
+// One walk of the type and label pass. `state` is read and joined into; bsl_taint.h repeats the walk until it is
+// stable. The reasons describe this walk only.
+CodeAnalysis AnalyzeCodeWalk(const Body& body, const TypeCheckOptions& options, LabelState& state);
 
 }  // namespace lineage::bsl

@@ -1,6 +1,7 @@
 #include "test_framework.h"
 #include "analysis_helpers.h"
 #include "policy_fixture.h"
+#include "bsl/bsl_canonical.h"
 
 #include <memory>
 #include <string>
@@ -10,21 +11,6 @@ using namespace lineage::strict;
 
 namespace {
 
-// Stands in for the CheckQuery column labels (Task 25): every executed query yields columns С (a reference to
-// Справочник.А) and И (a plain value).
-TypeCheckOptions WithColumns() {
-    TypeCheckOptions o;
-    o.columns_for_query = [](const lineage::bsl::Expr*) {
-        auto set = std::make_shared<ColumnSet>();
-        ColumnInfo ref;
-        ref.refs.push_back("Справочник.А");
-        set->columns["С"] = ref;
-        set->columns["И"] = ColumnInfo();
-        return std::shared_ptr<const ColumnSet>(set);
-    };
-    return o;
-}
-
 void Dump(const std::string& code, const CodeAnalysis& r) {
     std::cout << "  refused: " << code << std::endl << "   ";
     for (const CodeReason& reason : r.reasons) {
@@ -33,20 +19,21 @@ void Dump(const std::string& code, const CodeAnalysis& r) {
     std::cout << std::endl;
 }
 
-bool Safe(const std::string& code, const TypeCheckOptions& o = TypeCheckOptions()) {
-    const CodeAnalysis r = CheckCodeForTest(kPolicyAB, code, o);
+bool Safe(const std::string& code, const TokenTable& tokens = TokenTable()) {
+    const auto r = CheckCodeForTest(kPolicyAB, code, tokens);
     if (r.verdict != CodeVerdict::Safe) Dump(code, r);
     return r.verdict == CodeVerdict::Safe && r.reasons.empty();
 }
 
-bool Denied(const std::string& code, const char* reason, const TypeCheckOptions& o = TypeCheckOptions()) {
-    const CodeAnalysis r = CheckCodeForTest(kPolicyAB, code, o);
+bool Denied(const std::string& code, const char* reason, const TokenTable& tokens = TokenTable()) {
+    const auto r = CheckCodeForTest(kPolicyAB, code, tokens);
     const bool ok = r.verdict == CodeVerdict::Confirm && HasCodeReason(r, reason);
     if (!ok) Dump(code, r);
     return ok;
 }
 
-const char* kQ = "З = Новый Запрос(\"ВЫБРАТЬ А.Ссылка КАК С, А.Имя КАК И ИЗ Справочник.А КАК А\");\n";
+// Columns С (an open reference to Справочник.А) and Имя (protected), as CheckQuery labels them under kPolicyAB.
+const char* kQ = "З = Новый Запрос(\"ВЫБРАТЬ А.Ссылка КАК С, А.Имя КАК Имя ИЗ Справочник.А КАК А\");\n";
 
 }  // namespace
 
@@ -69,34 +56,34 @@ TEST(BslTaint, AcceptsLegitimateQueryFlow) {
     const std::string code = std::string(kQ) +
         "Т = З.Выполнить().Выгрузить();\n"
         "М = Новый Массив;\n"
-        "Для Каждого Стр Из Т Цикл М.Добавить(Новый Структура(\"С, И\", Стр.С, Стр.И)); КонецЦикла;\n"
+        "Для Каждого Стр Из Т Цикл М.Добавить(Новый Структура(\"С, Имя\", Стр.С, Стр.Имя)); КонецЦикла;\n"
         "Результат = М;";
-    CHECK(Safe(code, WithColumns()));
+    CHECK(Safe(code));
     const std::string sel = std::string(kQ) +
         "В = З.Выполнить().Выбрать(); М = Новый Массив;\n"
-        "Пока В.Следующий() Цикл М.Добавить(В.И); КонецЦикла; Результат = М;";
-    CHECK(Safe(sel, WithColumns()));
+        "Пока В.Следующий() Цикл М.Добавить(В.Имя); КонецЦикла; Результат = М;";
+    CHECK(Safe(sel));
     CHECK(Safe("З = Новый Запрос; З.Текст = \"ВЫБРАТЬ 1\" + \" КАК А\"; З.УстановитьПараметр(\"П\", 1);\n"
                "Результат = З.Выполнить().Пустой();"));
 }
 
 TEST(BslTaint, ColumnsNeedKnownColumnSet) {
-    // Without labels from the query check a column read is refused, not guessed.
-    CHECK(Denied(std::string(kQ) + "В = З.Выполнить().Выбрать(); Результат = В.И;", "C_UNKNOWN_MEMBER"));
-    CHECK(Denied(std::string(kQ) + "В = З.Выполнить().Выбрать(); Результат = В.Нет;", "C_UNKNOWN_MEMBER", WithColumns()));
-    CHECK(Denied(std::string(kQ) + "Т = З.Выполнить().Выгрузить(); Результат = Т[0].Нет;", "C_UNKNOWN_MEMBER", WithColumns()));
-    CHECK(Safe(std::string(kQ) + "Т = З.Выполнить().Выгрузить(); Результат = Т[0].И;", WithColumns()));
-    CHECK(Safe(std::string(kQ) + "В = З.Выполнить().Выбрать(); Результат = В.и;", WithColumns()));
+    // Without labels from the query check (here: the text does not parse) a column read is refused, not guessed.
+    CHECK(Denied("З = Новый Запрос(\"ВЫБРАТЬ\"); В = З.Выполнить().Выбрать(); Результат = В.Имя;", "C_UNKNOWN_MEMBER"));
+    CHECK(Denied(std::string(kQ) + "В = З.Выполнить().Выбрать(); Результат = В.Нет;", "C_UNKNOWN_MEMBER"));
+    CHECK(Denied(std::string(kQ) + "Т = З.Выполнить().Выгрузить(); Результат = Т[0].Нет;", "C_UNKNOWN_MEMBER"));
+    CHECK(Safe(std::string(kQ) + "Т = З.Выполнить().Выгрузить(); Результат = Т[0].Имя;"));
+    CHECK(Safe(std::string(kQ) + "В = З.Выполнить().Выбрать(); Результат = В.иМЯ;"));
 }
 
 TEST(BslTaint, ReferenceMethodsOnlyOnReferenceColumns) {
     const std::string pre = std::string(kQ) + "Т = З.Выполнить().Выгрузить(); Р = Т[0];\n";
-    CHECK(Safe(pre + "Результат = Р.С.УникальныйИдентификатор();", WithColumns()));
-    CHECK(Safe(pre + "Результат = Р.С.Метаданные().ПолноеИмя();", WithColumns()));
-    CHECK(Safe(pre + "Результат = Р.С.Пустая();", WithColumns()));
-    CHECK(Denied(pre + "Результат = Р.И.УникальныйИдентификатор();", "C_UNKNOWN_RECEIVER", WithColumns()));
-    CHECK(Denied(pre + "Результат = Р.С.ПолучитьОбъект();", "C_UNKNOWN_METHOD", WithColumns()));
-    CHECK(Denied(pre + "Результат = Р.С.Метаданные().Имя();", "C_UNKNOWN_METHOD", WithColumns()));
+    CHECK(Safe(pre + "Результат = Р.С.УникальныйИдентификатор();"));
+    CHECK(Safe(pre + "Результат = Р.С.Метаданные().ПолноеИмя();"));
+    CHECK(Safe(pre + "Результат = Р.С.Пустая();"));
+    CHECK(Denied(pre + "Результат = Р.Имя.УникальныйИдентификатор();", "C_UNKNOWN_RECEIVER"));
+    CHECK(Denied(pre + "Результат = Р.С.ПолучитьОбъект();", "C_UNKNOWN_METHOD"));
+    CHECK(Denied(pre + "Результат = Р.С.Метаданные().Имя();", "C_UNKNOWN_METHOD"));
 }
 
 TEST(BslTaint, MethodsOnUnknownAreDenied) {
@@ -177,7 +164,7 @@ TEST(BslTaint, QueryTextRules) {
     CHECK(Denied("З = Новый Запрос; З.Параметры = 1; Результат = 1;", "C_UNKNOWN_MEMBER"));
     CHECK(Denied("З = Новый Запрос; Н = \"П\"; З.УстановитьПараметр(Н, 1); Результат = 1;", "C_DYNAMIC_PARAM"));
     CHECK(Denied("З = Новый Запрос; Результат = З.Текст;", "C_UNKNOWN_MEMBER"));
-    const CodeAnalysis r = CheckCodeForTest(kPolicyAB,
+    const auto r = CheckCodeForTest(kPolicyAB,
         "З = Новый Запрос(\"ВЫБРАТЬ 1\"); З.Текст = \"ВЫБРАТЬ 2\" + \" \" + \"КАК А\"; Результат = 1;");
     CHECK_EQ(r.query_texts.size(), static_cast<size_t>(2));
     CHECK_EQ(r.query_texts[0].text, std::string("ВЫБРАТЬ 1"));
@@ -225,4 +212,369 @@ TEST(BslTaint, ScalarArithmeticTypes) {
     CHECK(Denied("Х = 1 + 2; Результат = Х.Метод();", "C_UNKNOWN_METHOD"));
     CHECK(Safe("Результат = ?(Истина, 1, 2);"));
     CHECK(Denied("Результат = ?(Истина, Новый Массив, 2).Количество();", "C_UNKNOWN_RECEIVER"));
+}
+
+// ---- Task 25: taint propagation, implicit flow, query integration, bound tokens ----
+
+TEST(BslTaint, ImplicitFlowOnProtectedCondition) {
+    auto r = CheckCodeForTest(kPolicyAB,
+        "З = Новый Запрос(\"ВЫБРАТЬ А.Имя КАК Имя ИЗ Справочник.А КАК А\"); В = З.Выполнить().Выбрать(); Н = 0;\n"
+        "Пока В.Следующий() Цикл Если В.Имя = \"x\" Тогда Н = Н + 1; КонецЕсли; КонецЦикла; Результат = Н;");
+    CHECK(HasCodeReason(r, "C_IMPLICIT_FLOW"));
+}
+
+TEST(BslTaint, CharCodesOfProtectedNeedConfirmation) {
+    auto r = CheckCodeForTest(kPolicyAB,
+        "З = Новый Запрос(\"ВЫБРАТЬ А.Имя КАК Имя ИЗ Справочник.А КАК А\"); Т = З.Выполнить().Выгрузить();\n"
+        "Результат = КодСимвола(Т[0].Имя, 1);");
+    CHECK(HasCodeReason(r, "C_FUNC_OVER_PROTECTED"));
+}
+
+TEST(BslTaint, MovingProtectedIntoResultIsSafe) {
+    auto r = CheckCodeForTest(kPolicyAB,
+        "З = Новый Запрос(\"ВЫБРАТЬ А.Ссылка КАК С, А.Имя КАК Имя ИЗ Справочник.А КАК А\"); Т = З.Выполнить().Выгрузить();\n"
+        "М = Новый Массив; Для Каждого Стр Из Т Цикл М.Добавить(Новый Структура(\"С, Имя\", Стр.С, Стр.Имя)); КонецЦикла;\n"
+        "Результат = М;");
+    CHECK(r.verdict == CodeVerdict::Safe);
+}
+
+TEST(BslTaint, DynamicQueryTextNeedsConfirmation) {
+    CHECK(HasCodeReason(CheckCodeForTest(kPolicyAB, "Т = \"ВЫБРАТЬ 1\"; З = Новый Запрос; З.Текст = Т + \"\"; Результат = 1;"),
+                        "C_DYNAMIC_QUERY"));
+}
+
+namespace {
+
+// kQ plus a value table Т of its rows.
+std::string WithTable(const std::string& rest) {
+    return std::string(kQ) + "Т = З.Выполнить().Выгрузить();\n" + rest;
+}
+
+TokenTable OneToken() {
+    TokenTable t;
+    TokenBinding b;
+    b.index = 0;
+    b.origin = Origin::ProtectedDirect;
+    t["[STR-00001]"] = b;
+    return t;
+}
+
+// Справочник.А with an open presentation: a reference may then be read as a string.
+const FieldPolicy kPolicyOpenPresentation = ParsePolicyOrDie(R"({
+  "version": 1,
+  "tables": {
+    "Справочник.А": {
+      "presentation": "open",
+      "fields": {"Имя": {"class": "protected"}, "Ссылка": {"class": "open", "refs": ["Справочник.А"]}}
+    }
+  }
+})");
+
+}  // namespace
+
+TEST(BslTaint, OperatorsOverProtectedNeedConfirmation) {
+    // A comparison is a dictionary oracle even without a branch.
+    CHECK(Denied(WithTable("Результат = Т[0].Имя = \"Иванов\";"), "C_FUNC_OVER_PROTECTED"));
+    CHECK(Denied(WithTable("Результат = Т[0].Имя + \"x\";"), "C_FUNC_OVER_PROTECTED"));
+    CHECK(Denied(WithTable("Итог = 0; Итог = Итог + Т[0].Имя; Результат = Итог;"), "C_FUNC_OVER_PROTECTED"));
+    CHECK(Denied(WithTable("Результат = Не Т[0].Имя;"), "C_FUNC_OVER_PROTECTED"));
+    CHECK(Denied(WithTable("Результат = ЗначениеЗаполнено(Т[0].Имя);"), "C_FUNC_OVER_PROTECTED"));
+    CHECK(Denied(WithTable("Результат = ТипЗнч(Т[0].Имя);"), "C_FUNC_OVER_PROTECTED"));
+    // Comparing open references is fine.
+    CHECK(Safe(WithTable("Результат = Т[0].С = Т[0].С;")));
+}
+
+TEST(BslTaint, ReferencesReadAsStringsUsePresentation) {
+    CHECK(Denied(WithTable("Результат = Строка(Т[0].С);"), "C_FUNC_OVER_PROTECTED"));
+    CHECK(Denied(WithTable("Результат = \"x\" + Т[0].С;"), "C_FUNC_OVER_PROTECTED"));
+    const auto open = CheckCodeForTest(kPolicyOpenPresentation, WithTable("Результат = Строка(Т[0].С) + \"x\";"));
+    CHECK(open.verdict == CodeVerdict::Safe);
+    // An element of unknown type may be a reference whose targets are unknown.
+    CHECK(Denied(WithTable("М = Т.ВыгрузитьКолонку(\"С\"); Х = М[0]; М2 = Новый Массив; М2.Добавить(Х);\n"
+                           "Результат = Строка(М2[0]);"), "C_FUNC_OVER_PROTECTED"));
+    CHECK(Safe("М = Новый Массив; М.Добавить(1); Результат = Строка(М[0]);"));
+}
+
+TEST(BslTaint, KeysAndIndexesOverProtected) {
+    CHECK(Denied(WithTable("С = Новый Соответствие; С.Вставить(Т[0].Имя, 1); Результат = С.Получить(\"Иванов\");"),
+                 "C_FUNC_OVER_PROTECTED"));
+    CHECK(Denied(WithTable("С = Новый Соответствие; С.Вставить(\"Иванов\", 1); Результат = С.Получить(Т[0].Имя);"),
+                 "C_FUNC_OVER_PROTECTED"));
+    CHECK(Denied(WithTable("С = Новый Соответствие; С.Вставить(Т[0].Имя, 1); Результат = С.Количество();"),
+                 "C_FUNC_OVER_PROTECTED"));
+    CHECK(Denied(WithTable("С = Новый Структура; С.Вставить(Т[0].Имя, 1); Результат = 1;"), "C_TAINTED_KEY"));
+    CHECK(Denied(WithTable("М = Новый Массив; Результат = М[Т[0].Имя];"), "C_FUNC_OVER_PROTECTED"));
+    // Protected values stored under client keys and read back by those keys are only moved.
+    CHECK(Safe(WithTable("С = Новый Соответствие; С.Вставить(\"К\", Т[0].Имя); С.Вставить(Т[0].С, Т[0].Имя);\n"
+                         "Результат = С.Получить(\"К\");")));
+}
+
+TEST(BslTaint, ImplicitFlowChannels) {
+    CHECK(Denied(WithTable("Н = 0; Если Ложь Тогда Н = 1; ИначеЕсли Т[0].Имя = \"x\" Тогда Н = 2; КонецЕсли; Результат = Н;"),
+                 "C_IMPLICIT_FLOW"));
+    CHECK(Denied(WithTable("Результат = ?(Т[0].Имя = \"x\", 1, 0);"), "C_IMPLICIT_FLOW"));
+    CHECK(Denied(WithTable("С = Новый Структура; Л = Т[0].Имя = \"x\" И С.Свойство(\"К\", Х); Результат = 1;"),
+                 "C_IMPLICIT_FLOW"));
+    CHECK(Denied(WithTable("Н = 0; Пока Т[0].Имя = \"x\" Цикл Н = 1; Прервать; КонецЦикла; Результат = Н;"),
+                 "C_IMPLICIT_FLOW"));
+    CHECK(Denied(WithTable("М = Т.ВыгрузитьКолонку(\"Имя\"); Для Каждого Э Из М Цикл Если Э = \"x\" Тогда Н = 1; КонецЕсли;\n"
+                           "КонецЦикла; Результат = 1;"), "C_IMPLICIT_FLOW"));
+    // A Попытка body that operates on protected data: the Исключение block depends on it.
+    CHECK(Denied(WithTable("Попытка Х = Число(Т[0].Имя); Исключение Х = 0; КонецПопытки; Результат = Х;"), "C_IMPLICIT_FLOW"));
+    CHECK(Safe("Попытка Х = 1; Исключение Х = 0; КонецПопытки; Результат = Х;"));
+}
+
+TEST(BslTaint, PcTaintsAssignmentsAndMutations) {
+    const auto r = CheckCodeForTest(kPolicyAB,
+        WithTable("Н = 0; М = Новый Массив; Если Т[0].Имя = \"x\" Тогда Н = 1; М.Добавить(1); КонецЕсли;\n"
+                  "Результат = Новый Структура(\"Н, М\", Н, М.Количество());"));
+    CHECK(HasCodeReason(r, "C_IMPLICIT_FLOW"));
+    CHECK(IsTainted(r.result_label));
+}
+
+TEST(BslTaint, AliasesShareCollectionContents) {
+    // Д and М are one array: data added through Д is seen through М.
+    CHECK(Denied(WithTable("М = Новый Массив; Д = М; Д.Добавить(Т[0].Имя);\n"
+                           "Для Каждого Э Из М Цикл Если Э = \"x\" Тогда Н = 1; КонецЕсли; КонецЦикла; Результат = 1;"),
+                 "C_IMPLICIT_FLOW"));
+    // Результат taken before the mutation still carries it.
+    const auto r = CheckCodeForTest(kPolicyAB, WithTable("М = Новый Массив; Результат = М; М.Добавить(Т[0].Имя);"));
+    CHECK(r.verdict == CodeVerdict::Safe);
+    CHECK_EQ(r.result_label, Origin::ProtectedDirect);
+    // A collection nested in another one, mutated afterwards.
+    const auto n = CheckCodeForTest(kPolicyAB,
+        WithTable("В = Новый Массив; М = Новый Массив; М.Добавить(В); В.Добавить(Т[0].Имя); Результат = М;"));
+    CHECK_EQ(n.result_label, Origin::ProtectedDirect);
+    CHECK_EQ(CheckCodeForTest(kPolicyAB, "Результат = Новый Структура(\"К\", \"x\");").result_label, Origin::Client);
+}
+
+TEST(BslTaint, CountersAndOpenAccumulationStaySafe) {
+    CHECK(Safe(WithTable("Н = 0; Для Каждого Стр Из Т Цикл Н = Н + 1; КонецЦикла;\n"
+                         "Для Инд = 0 По Т.Количество() - 1 Цикл Н = Н + 1; КонецЦикла; Результат = Н;")));
+    CHECK(Safe("З = Новый Запрос(\"ВЫБРАТЬ Б.Сумма КАК Сумма ИЗ Справочник.Б КАК Б\"); Т = З.Выполнить().Выгрузить();\n"
+               "Итог = 0; Для Каждого Стр Из Т Цикл Итог = Итог + Стр.Сумма; КонецЦикла; Результат = Итог;"));
+    CHECK(Safe(WithTable("В = З.Выполнить().Выбрать(); Н = 0; Пока В.Следующий() Цикл Если В.С = Т[0].С Тогда Н = Н + 1;\n"
+                         "КонецЕсли; КонецЦикла; Результат = Н;")));
+}
+
+TEST(BslTaint, LoopHeadJoinsEveryAssignment) {
+    // Продолжить skips the later assignment: the value from the first branch reaches the next iteration.
+    CHECK(Denied("Х = Новый Массив; Для Н = 1 По 3 Цикл Х.Добавить(1); Если Н = 2 Тогда Х = Новый Структура; Продолжить;\n"
+                 "КонецЕсли; Х = Новый Массив; КонецЦикла; Результат = 1;", "C_UNKNOWN_RECEIVER"));
+    CHECK(Safe("Х = Новый Массив; Для Н = 1 По 3 Цикл Х.Добавить(Н); Х = Новый Массив; КонецЦикла; Результат = Х.Количество();"));
+}
+
+TEST(BslTaint, DereferenceUsesFieldPolicy) {
+    CHECK(Safe(WithTable("Результат = Т[0].С.Имя;")));
+    CHECK(Safe(WithTable("Результат = Т[0].С.Ссылка.УникальныйИдентификатор();")));
+    CHECK(Denied(WithTable("Если Т[0].С.Код = \"1\" Тогда Н = 1; КонецЕсли; Результат = 1;"), "C_IMPLICIT_FLOW"));
+    CHECK(Denied(WithTable("Результат = Т[0].С.Нет;"), "C_UNKNOWN_MEMBER"));
+    const auto r = CheckCodeForTest(kPolicyAB, WithTable("Результат = Т[0].С.Имя;"));
+    CHECK_EQ(r.result_label, Origin::ProtectedDirect);
+}
+
+TEST(BslTaint, QueryParametersFromCode) {
+    const std::string q2 = "З2 = Новый Запрос(\"ВЫБРАТЬ А.Ссылка КАК С ИЗ Справочник.А КАК А ГДЕ А.Имя = &П\");\n";
+    // A client value compared with a protected field: the dictionary oracle of the query path.
+    CHECK(Denied(q2 + "З2.УстановитьПараметр(\"П\", \"Иванов\"); Результат = З2.Выполнить().Выгрузить();",
+                 "Q_EQ_CLIENT_PARAM"));
+    // A protected value from another query, or an issued token, is compared with protected data: fine.
+    CHECK(Safe(WithTable(q2 + "З2.УстановитьПараметр(\"П\", Т[0].Имя); Результат = З2.Выполнить().Выгрузить();")));
+    CHECK(Safe(q2 + "З2.УстановитьПараметр(\"П\", \"[STR-00001]\"); Результат = З2.Выполнить().Выгрузить();", OneToken()));
+    // Bound on one path to a client value: the join is mixed.
+    CHECK(!Safe(WithTable(q2 + "Если Истина Тогда З2.УстановитьПараметр(\"П\", Т[0].Имя); Иначе З2.УстановитьПараметр(\"П\", \"x\");\n"
+                               "КонецЕсли; Результат = З2.Выполнить().Выгрузить();")));
+    // Never set: the host's "params" do not apply to code.
+    CHECK(!Safe(q2 + "Результат = З2.Выполнить().Выгрузить();"));
+    // The token parameter namespace is reserved.
+    CHECK(Denied("З = Новый Запрос(\"ВЫБРАТЬ 1 КАК А\"); З.УстановитьПараметр(\"МСПТокен1\", 1); Результат = 1;", "C_RESERVED"));
+    CHECK(Denied("З = Новый Запрос(\"ВЫБРАТЬ &мспТокен1 КАК А\"); Результат = З.Выполнить().Выгрузить();", "C_RESERVED"));
+}
+
+TEST(BslTaint, SeveralTextsPerSiteTakeTheWorstColumn) {
+    const std::string one = "З = Новый Запрос(\"ВЫБРАТЬ А.Ссылка КАК С ИЗ Справочник.А КАК А\");\n";
+    const std::string use = "Т = З.Выполнить().Выгрузить(); Если Т[0].С = Неопределено Тогда Н = 1; КонецЕсли; Результат = 1;";
+    CHECK(Safe(one + use));
+    CHECK(Denied(one + "Если Истина Тогда З.Текст = \"ВЫБРАТЬ А.Имя КАК С ИЗ Справочник.А КАК А\"; КонецЕсли;\n" + use,
+                 "C_IMPLICIT_FLOW"));
+    // Different column names: no column is known.
+    CHECK(Denied(one + "З.Текст = \"ВЫБРАТЬ А.Ссылка КАК Д ИЗ Справочник.А КАК А\"; Т = З.Выполнить().Выгрузить();\n"
+                       "Результат = Т[0].С;", "C_UNKNOWN_MEMBER"));
+}
+
+TEST(BslTaint, QueryReasonsCanonicalAndMissingTables) {
+    const auto ok = CheckCodeForTest(kPolicyAB, WithTable("Результат = Т;"));
+    CHECK(ok.verdict == CodeVerdict::Safe);
+    CHECK_EQ(ok.query_canonical.size(), static_cast<size_t>(1));
+    CHECK(ok.query_canonical.begin()->first == ok.query_texts[0].text_expr);
+    CHECK(!ok.query_canonical.begin()->second.empty());
+    const auto missing = CheckCodeForTest(kPolicyAB,
+        "З = Новый Запрос(\"ВЫБРАТЬ Н.Ссылка КАК С ИЗ Справочник.Нет КАК Н\"); Результат = З.Выполнить().Выгрузить();");
+    CHECK(missing.verdict == CodeVerdict::Confirm);
+    CHECK_EQ(missing.missing_tables.count("Справочник.Нет"), static_cast<size_t>(1));
+    // A query reason is reported at the text's position in the code.
+    const auto bad = CheckCodeForTest(kPolicyAB,
+        "З = Новый Запрос(\"ВЫБРАТЬ А.Ссылка КАК С ИЗ Справочник.А КАК А ГДЕ А.Имя = \"\"x\"\"\"); Результат = 1;");
+    CHECK(HasCodeReason(bad, "Q_EQ_LITERAL"));
+}
+
+TEST(BslTaint, BoundTokens) {
+    const auto r = CheckCodeForTest(kPolicyAB, "Результат = \"[STR-00001]\";", OneToken());
+    CHECK(r.verdict == CodeVerdict::Safe);
+    CHECK_EQ(r.bound_tokens.size(), static_cast<size_t>(1));
+    CHECK_EQ(r.bound_tokens.begin()->second, 0);
+    CHECK_EQ(r.result_label, Origin::ProtectedDirect);
+    CHECK_EQ(CheckCodeForTest(kPolicyAB, "Результат = \"[str-00001]\";", OneToken()).bound_tokens.size(), static_cast<size_t>(1));
+    CHECK(Denied("Результат = \"x[STR-00001]\";", "C_TOKEN_IN_STRING", OneToken()));
+    CHECK(Denied("Результат = \"[STR-00002]\";", "C_TOKEN_UNKNOWN", OneToken()));
+    CHECK(Denied("Результат = \"[STR-00001]\";", "C_TOKEN_UNKNOWN"));
+    CHECK(Denied("С = Новый Структура(\"[STR-00001]\", 1); Результат = С;", "C_TOKEN_AS_NAME", OneToken()));
+    CHECK(Denied("З = Новый Запрос(\"ВЫБРАТЬ 1 КАК А\"); З.УстановитьПараметр(\"[STR-00001]\", 1); Результат = 1;",
+                 "C_TOKEN_AS_NAME", OneToken()));
+    CHECK(Denied("З = Новый Запрос(\"ВЫБРАТЬ \"\"[STR-00001]\"\" КАК А\"); Результат = З.Выполнить().Выгрузить();",
+                 "C_TOKEN_IN_QUERY", OneToken()));
+    CHECK(Denied("Результат = \"[STR-00001]\" + \"x\";", "C_FUNC_OVER_PROTECTED", OneToken()));
+    CHECK(Denied(WithTable("Если Т[0].Имя = \"[STR-00001]\" Тогда Н = 1; КонецЕсли; Результат = 1;"), "C_IMPLICIT_FLOW",
+                 OneToken()));
+    CHECK(Safe("Результат = \"[STR-0001]\" + \"[ИНН-00001]\" + \"[A00001]\";"));   // not the token format
+}
+
+TEST(BslTaint, TokenTableParsing) {
+    TokenTable t;
+    CHECK(ParseTokenTable(R"({"version": 1})", t) && t.empty());
+    CHECK(ParseTokenTable(R"({"tokens": {"[str-00001]": {"index": 0, "origin": "protected"},
+                                         "[ORG-00002]": {"index": 1, "origin": "unknown"}}})", t));
+    CHECK_EQ(t.size(), static_cast<size_t>(2));
+    CHECK(t.count("[STR-00001]") == 1 && t["[STR-00001]"].origin == Origin::ProtectedDirect);
+    CHECK(t["[ORG-00002]"].origin == Origin::Unknown && t["[ORG-00002]"].index == 1);
+    for (const char* bad : {
+             R"({"tokens": []})", R"({"tokens": {"STR-00001": {"index": 0, "origin": "protected"}}})",
+             R"({"tokens": {"[STR-00001]": {"index": -1, "origin": "protected"}}})",
+             R"({"tokens": {"[STR-00001]": {"index": 0, "origin": "client"}}})",
+             R"({"tokens": {"[STR-00001]": {"index": 0}}})",
+             R"({"tokens": {"[STR-00001]": {"index": 0, "origin": "protected", "value": "x"}}})",
+             R"({"tokens": {"[STR-00001]": {"index": 0, "origin": "protected"}, "[ORG-00001]": {"index": 0, "origin": "protected"}}})",
+             R"({"tokens": {"[STR-00001]": {"index": 0, "origin": "protected"}, "[str-00001]": {"index": 1, "origin": "protected"}}})",
+             "{"}) {
+        CHECK(!ParseTokenTable(bad, t));
+        CHECK(t.empty());
+    }
+    CHECK(IsTokenFormat("[INN-00001]") && IsTokenFormat("[a-123456]"));
+    CHECK(!IsTokenFormat("[INN-0001]") && !IsTokenFormat("[ИНН-00001]") && !IsTokenFormat("[INN00001]"));
+}
+
+TEST(BslTaint, ColumnsFromBoundParametersAreNotOvertainted) {
+    // The first pass checks the query before the code has bound П; that pass must not leave Unknown behind.
+    const auto r = CheckCodeForTest(kPolicyAB,
+        "З = Новый Запрос(\"ВЫБРАТЬ &П КАК Х\"); З.УстановитьПараметр(\"П\", 1);\n"
+        "Т = З.Выполнить().Выгрузить(); М = Новый Массив; М.Добавить(Т[0].Х); Результат = М;");
+    CHECK(r.verdict == CodeVerdict::Safe);
+    CHECK_EQ(r.result_label, Origin::Client);
+}
+
+TEST(BslTaint, ReplacementsPrintThroughTheCanonicalPrinter) {
+    // The body must outlive the analysis: its nodes key the replacement maps.
+    const lineage::bsl::ParseResult parsed = lineage::bsl::ParseBsl(
+        "З = Новый Запрос; З.Текст = \"ВЫБРАТЬ А.Ссылка КАК С ИЗ Справочник.А КАК А ГДЕ А.Имя = &П\";\n"
+        "З.УстановитьПараметр(\"П\", \"[STR-00001]\"); Результат = З.Выполнить().Выгрузить();");
+    CHECK(parsed.ok);
+    const CodeAnalysis r = AnalyzeCode(parsed.body, kPolicyAB, OneToken());
+    CHECK(r.verdict == CodeVerdict::Safe);
+    lineage::bsl::PrintOptions options;
+    options.query_replacements = r.query_canonical;
+    options.bound_tokens = r.bound_tokens;
+    const lineage::bsl::PrintResult printed = lineage::bsl::PrintBslCanonicalChecked(parsed.body, options);
+    CHECK(printed.ok);
+    CHECK(printed.text.find("МСПЗначенияТокенов[0]") != std::string::npos);
+    CHECK(printed.text.find("[STR-00001]") == std::string::npos);
+    CHECK(printed.text.find(r.query_canonical.begin()->second.substr(0, 14)) != std::string::npos);
+}
+
+TEST(BslTaint, DeepNestingStaysWithinBudget) {
+    // 30 nested loops, each with a branch: the walk must end (C_LIMIT at worst), quickly.
+    std::string code = "Н = 0;\n";
+    for (int i = 0; i < 30; ++i) code += "Для И" + std::to_string(i) + " = 1 По 2 Цикл Если Н = 1 Тогда Н" + std::to_string(i) + " = Н; КонецЕсли;\n";
+    code += "Н = Н + 1;\n";
+    for (int i = 0; i < 30; ++i) code += "КонецЦикла;\n";
+    code += "Результат = Н;";
+    const lineage::bsl::ParseResult parsed = lineage::bsl::ParseBsl(code);
+    CHECK(parsed.ok);
+    const CodeAnalysis r = AnalyzeCode(parsed.body, kPolicyAB, TokenTable());
+    CHECK(r.verdict == CodeVerdict::Safe || HasCodeReason(r, "C_LIMIT"));
+}
+
+namespace {
+
+// Справочник.А with a protected reference Р to Справочник.Б (open amount).
+const FieldPolicy kPolicyProtectedRef = ParsePolicyOrDie(R"({
+  "version": 1,
+  "tables": {
+    "Справочник.А": {
+      "presentation": "protected",
+      "fields": {"Р": {"class": "protected", "refs": ["Справочник.Б"]}, "Ссылка": {"class": "open", "refs": ["Справочник.А"]}}
+    },
+    "Справочник.Б": {
+      "presentation": "protected",
+      "fields": {"Сумма": {"class": "open"}, "Ссылка": {"class": "open", "refs": ["Справочник.Б"]}}
+    }
+  }
+})");
+
+const char* kQR = "З = Новый Запрос(\"ВЫБРАТЬ А.Р КАК Р ИЗ Справочник.А КАК А\"); Т = З.Выполнить().Выгрузить();\n";
+
+}  // namespace
+
+TEST(BslTaint, DereferenceOfTaintedReferenceIsAnOperation) {
+    // Moving the protected reference itself is fine; reading through it picks a row by a protected value.
+    CHECK(CheckCodeForTest(kPolicyProtectedRef, std::string(kQR) + "Результат = Т[0].Р;").verdict == CodeVerdict::Safe);
+    const auto r = CheckCodeForTest(kPolicyProtectedRef, std::string(kQR) + "Результат = Т[0].Р.Сумма;");
+    CHECK(HasCodeReason(r, "C_FUNC_OVER_PROTECTED"));
+    // The dereference may fail, so the Исключение block depends on it.
+    const auto t = CheckCodeForTest(kPolicyProtectedRef,
+        std::string(kQR) + "Н = 0; Попытка Х = Т[0].Р.Сумма; Н = 1; Исключение КонецПопытки; Результат = Н;");
+    CHECK(HasCodeReason(t, "C_IMPLICIT_FLOW"));
+    CHECK(IsTainted(t.result_label));
+}
+
+TEST(BslTaint, KeyInsertionNextToTaintedKeysIsAnOracle) {
+    CHECK(Denied(WithTable("М = Новый Соответствие; М.Вставить(Т[0].Имя, 1); М.Вставить(\"Иванов\", 2); Результат = М;"),
+                 "C_TAINTED_KEY"));
+    CHECK(Denied("М = Новый Соответствие; М.Вставить(\"[STR-00001]\", 1); М.Вставить(\"Иванов\", 2); Результат = М;",
+                 "C_TAINTED_KEY", OneToken()));
+    CHECK(Denied("М = Новый Соответствие; М[\"[STR-00001]\"] = 1; Результат = М;", "C_TAINTED_KEY", OneToken()));
+    CHECK(Denied(WithTable("М = Новый Соответствие; М.Вставить(\"Иванов\", 1); М.Вставить(Т[0].Имя, 2); Результат = М;"),
+                 "C_TAINTED_KEY"));
+    // Open references and client literals as keys are fine.
+    CHECK(Safe(WithTable("М = Новый Соответствие; М.Вставить(Т[0].С, 1); М.Вставить(Т[1].С, 2); М[\"К\"] = 3; Результат = М;")));
+}
+
+TEST(BslTaint, UnloadingAnUnknownColumnIsRefused) {
+    CHECK(Denied(WithTable("Результат = Т.ВыгрузитьКолонку(\"Нет\");"), "C_UNKNOWN_MEMBER"));
+    CHECK(Safe(WithTable("Результат = Т.ВыгрузитьКолонку(\"С\");")));
+}
+
+TEST(BslTaint, ConditionalLoopExitTaintsWhatTheLoopLeaves) {
+    const auto b = CheckCodeForTest(kPolicyAB,
+        WithTable("Н = 0; Для Каждого Стр Из Т Цикл Если Стр.Имя = \"x\" Тогда Прервать; КонецЕсли; Н = Н + 1;\n"
+                  "КонецЦикла; Результат = Н;"));
+    CHECK(HasCodeReason(b, "C_IMPLICIT_FLOW"));
+    CHECK(IsTainted(b.result_label));
+    const auto c = CheckCodeForTest(kPolicyAB,
+        WithTable("Н = 0; Для Каждого Стр Из Т Цикл Если Стр.Имя = \"x\" Тогда Продолжить; КонецЕсли; Н = Н + 1;\n"
+                  "КонецЦикла; Результат = Н;"));
+    CHECK(IsTainted(c.result_label));
+    // An exit under an open condition taints nothing.
+    const auto o = CheckCodeForTest(kPolicyAB,
+        WithTable("Н = 0; Для Каждого Стр Из Т Цикл Если Н = 3 Тогда Прервать; КонецЕсли; Н = Н + 1; КонецЦикла; Результат = Н;"));
+    CHECK(o.verdict == CodeVerdict::Safe);
+    CHECK(!IsTainted(o.result_label));
+}
+
+TEST(BslTaint, AnalysisKeepsItsParsedBody) {
+    // The Expr* keys of the result stay valid as long as the result lives.
+    const auto r = CheckCodeForTest(kPolicyAB, "Результат = \"[STR-00001]\";", OneToken());
+    CHECK(r.parsed && r.parsed->ok);
+    lineage::bsl::PrintOptions options;
+    options.bound_tokens = r.bound_tokens;
+    CHECK(lineage::bsl::PrintBslCanonicalChecked(r.parsed->body, options).ok);
 }

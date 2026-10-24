@@ -46,6 +46,7 @@ add_library(${PROJECT_NAME} SHARED
     src/bsl/bsl_dump.cpp
     src/bsl/bsl_canonical.cpp
     src/bsl/bsl_types.cpp
+    src/bsl/bsl_taint.cpp
 )
 
 target_include_directories(${PROJECT_NAME} PRIVATE
@@ -96,6 +97,7 @@ if(QUERY_LINEAGE_BUILD_TESTS)
         src/bsl/bsl_dump.cpp
         src/bsl/bsl_canonical.cpp
         src/bsl/bsl_types.cpp
+        src/bsl/bsl_taint.cpp
     )
     set(QLA_TEST_SOURCES
         tests/test_main.cpp
