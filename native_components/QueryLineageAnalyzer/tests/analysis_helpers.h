@@ -52,6 +52,7 @@ inline CodeCheck CheckCodeForTest(const FieldPolicy& policy, const std::string& 
     CodeCheck r;
     if (!parsed->ok) {
         r.reasons.push_back(bsl::CodeReason{parsed->error.code, parsed->error.pos});
+        r.risks = bsl::RefusedCodeRisks(code, parsed->error.code);   // no tree: the markers come from the text
     } else {
         static_cast<bsl::CodeAnalysis&>(r) = bsl::AnalyzeCode(parsed->body, policy, tokens);
     }

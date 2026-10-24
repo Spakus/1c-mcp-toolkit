@@ -1,5 +1,6 @@
 #pragma once
 #include <string>
+#include <vector>
 
 #include "bsl/bsl_ast.h"
 #include "bsl/bsl_types.h"
@@ -52,6 +53,22 @@ TokenUse ClassifyTokenLiteral(const std::string& value, const TokenTable* tokens
 // No "tokens" key is an empty table. A malformed table, a key that is not in the token format, a negative or
 // repeated index, or two keys equal up to case is false (the caller refuses the check).
 bool ParseTokenTable(const std::string& policy_json, TokenTable& out);
+
+// Risk classes (Task 26): R_PROTECTION, R_DEFERRED, R_WRITE, R_CREDENTIALS (bsl_allowlist.h, kRiskRules). AnalyzeCode
+// fills CodeAnalysis::risks from the tree (every name: variables, calls, "Новый" types, loop variables, members and
+// methods after a dot) and a risk forces Confirm. ScanRisksInSource is the same scan over the tokens of the source
+// text, for code the parser refused (no tree): the gate still shows the markers. If the tokenizer refuses part of the
+// text (an Unknown token, oversize) the whole normalised text is searched with word boundaries. Task 27 merges the
+// two for the CheckCode answer (MergeRisks); the host appends R_RELAUNCH / R_CLIENT_CONTEXT itself.
+std::vector<CodeReason> ScanRisksInSource(const std::string& utf8);
+// Risks of code the parser refused: ScanRisksInSource plus R_UNKNOWN_EFFECT (no tree, nothing proven); for C_EVAL and
+// C_DYNAMIC_NEW also R_PROTECTION and a raw scan of the string literals (alone and joined).
+std::vector<CodeReason> RefusedCodeRisks(const std::string& utf8, const std::string& parse_error_code);
+void MergeRisks(std::vector<CodeReason>& into, const std::vector<CodeReason>& more);
+
+// R_UNKNOWN_EFFECT (BSL side: protection class): a call the allowlist does not know (module function, unknown global,
+// method on an Unknown receiver or not allowed on a known type, unknown "Новый" type) can do anything, writes included.
+// Property reads without a call stay a reason only.
 
 // The taint pass over a body. `tokens` may be empty. Never throws: an internal failure is C_INTERNAL / confirm.
 CodeAnalysis AnalyzeCode(const Body& body, const strict::FieldPolicy& policy, const TokenTable& tokens);

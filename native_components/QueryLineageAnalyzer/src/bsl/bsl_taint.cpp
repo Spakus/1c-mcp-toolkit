@@ -9,7 +9,10 @@
 
 #include <nlohmann/json.hpp>
 
+#include "bsl/bsl_allowlist.h"
+#include "bsl/bsl_tokenizer.h"
 #include "strict/check_query.h"
+#include "utf_utils.h"
 
 namespace lineage::bsl {
 
@@ -177,6 +180,268 @@ std::set<const Expr*> TextExprs(const CodeAnalysis& a) {
     return out;
 }
 
+// ---- Risk classes (Task 26) ---------------------------------------------------------------------------------------
+
+constexpr unsigned kRiskProtection = 1, kRiskDeferred = 2, kRiskWrite = 4, kRiskCredentials = 8, kRiskUnknown = 16;
+constexpr size_t kMaxRisksPerClass = 50;   // the gate shows markers, not every occurrence
+
+struct RiskEntry {
+    std::string key;
+    RiskMatch match;
+    unsigned bit;
+};
+
+unsigned RiskBit(RiskClass c) {
+    switch (c) {
+        case RiskClass::Protection: return kRiskProtection;
+        case RiskClass::Deferred: return kRiskDeferred;
+        case RiskClass::Write: return kRiskWrite;
+        case RiskClass::Credentials: return kRiskCredentials;
+    }
+    return kRiskProtection;
+}
+
+const char* RiskCode(unsigned bit) {
+    switch (bit) {
+        case kRiskDeferred: return "R_DEFERRED";
+        case kRiskWrite: return "R_WRITE";
+        case kRiskCredentials: return "R_CREDENTIALS";
+        case kRiskUnknown: return "R_UNKNOWN_EFFECT";
+        default: return "R_PROTECTION";
+    }
+}
+
+const std::vector<RiskEntry>& RiskEntries() {
+    static const std::vector<RiskEntry> entries = [] {
+        std::vector<RiskEntry> v;
+        for (const RiskRule& r : kRiskRules) v.push_back(RiskEntry{AllowlistKey(r.name), r.match, RiskBit(r.cls)});
+        return v;
+    }();
+    return entries;
+}
+
+bool RuleMatches(const RiskEntry& e, const std::string& key) {
+    switch (e.match) {
+        case RiskMatch::Exact: return key == e.key;
+        case RiskMatch::Prefix: return key.compare(0, e.key.size(), e.key) == 0;
+        case RiskMatch::Contains: return key.find(e.key) != std::string::npos;
+    }
+    return false;
+}
+
+struct AllowedNames {
+    std::set<std::string> globals, news, methods;
+};
+
+const AllowedNames& Allowed() {
+    static const AllowedNames names = [] {
+        AllowedNames n;
+        for (const GlobalRule& r : kGlobalRules) {
+            n.globals.insert(AllowlistKey(r.ru));
+            n.globals.insert(AllowlistKey(r.en));
+        }
+        for (const NewRule& r : kNewRules) {
+            n.news.insert(AllowlistKey(r.ru));
+            n.news.insert(AllowlistKey(r.en));
+        }
+        for (const MethodRule& r : kMethodRules) {
+            n.methods.insert(AllowlistKey(r.ru));
+            n.methods.insert(AllowlistKey(r.en));
+        }
+        return n;
+    }();
+    return names;
+}
+
+// Classes of one name (AllowlistKey already applied). An allowlisted method name (УстановитьПараметр) is exempt from
+// the Prefix rows: it is the allowlist's own, on its own receiver type; on any other receiver the unknown-effect
+// risk applies.
+unsigned RiskMaskOfKey(const std::string& key) {
+    unsigned mask = 0;
+    const bool allowed = Allowed().methods.count(key) != 0;
+    for (const RiskEntry& e : RiskEntries()) {
+        if ((mask & e.bit) != 0 || !RuleMatches(e, key)) continue;
+        if (allowed && e.match == RiskMatch::Prefix) continue;
+        mask |= e.bit;
+    }
+    return mask;
+}
+
+// Characters that look alike across scripts: Latin capitals with their Cyrillic (including Ukrainian / Serbian) and
+// Greek twins. A mixed-script identifier is refused by the parser, but the gate still has to show what it imitates.
+struct Lookalike {
+    wchar_t latin, cyrillic, greek;
+};
+constexpr Lookalike kLookalikes[] = {
+    {L'A', 0x0410, 0x0391}, {L'B', 0x0412, 0x0392}, {L'C', 0x0421, 0},      {L'E', 0x0415, 0x0395},
+    {L'H', 0x041D, 0x0397}, {L'K', 0x041A, 0x039A}, {L'M', 0x041C, 0x039C}, {L'O', 0x041E, 0x039F},
+    {L'P', 0x0420, 0x03A1}, {L'T', 0x0422, 0x03A4}, {L'X', 0x0425, 0x03A7}, {L'Y', 0x0423, 0x03A5},
+    {L'I', 0x0406, 0x0399}, {L'S', 0x0405, 0},      {L'J', 0x0408, 0},      {L'Z', 0, 0x0396},
+    {L'N', 0, 0x039D},
+};
+
+// Greek twins always become Latin; then Latin <-> Cyrillic in the requested direction.
+std::string FoldHomoglyphs(const std::string& key, bool to_cyrillic) {
+    std::wstring units = Utf8ToUtf16Units(key);
+    for (wchar_t& u : units) {
+        for (const Lookalike& l : kLookalikes) {
+            if (l.greek != 0 && u == l.greek) u = l.latin;
+        }
+        for (const Lookalike& l : kLookalikes) {
+            if (l.cyrillic == 0) continue;
+            if (to_cyrillic && u == l.latin) { u = l.cyrillic; break; }
+            if (!to_cyrillic && u == l.cyrillic) { u = l.latin; break; }
+        }
+    }
+    return Utf16UnitsToUtf8(units);
+}
+
+// A name that may hide behind a script mix: any non-ASCII, non-Cyrillic character, or Latin together with Cyrillic.
+bool NeedsFold(const std::string& key) {
+    bool ascii = false, cyrillic = false;
+    for (wchar_t u : Utf8ToUtf16Units(key)) {
+        if (u < 0x80) {
+            if (u >= L'A' && u <= L'Z') ascii = true;
+        } else if (u >= 0x0400 && u <= 0x04FF) {
+            cyrillic = true;
+        } else {
+            return true;
+        }
+    }
+    return ascii && cyrillic;
+}
+
+class RiskCollector {
+public:
+    explicit RiskCollector(std::vector<CodeReason>& out) : out_(out) {}
+
+    void Name(const std::string& name, const Pos& pos, bool mixed = false) {
+        if (name.empty()) return;
+        const std::string key = AllowlistKey(name);
+        unsigned mask = Cached(key);
+        if (mixed || NeedsFold(key)) {
+            mask |= Cached(AllowlistKey(FoldHomoglyphs(key, true)));
+            mask |= Cached(AllowlistKey(FoldHomoglyphs(key, false)));
+        }
+        Add(mask, pos);
+    }
+
+    void Add(unsigned mask, const Pos& pos) {
+        for (unsigned bit = 1; bit <= kRiskUnknown; bit <<= 1) {
+            if ((mask & bit) == 0 || counts_[bit] >= kMaxRisksPerClass) continue;
+            ++counts_[bit];
+            out_.push_back(CodeReason{RiskCode(bit), pos});
+        }
+    }
+
+private:
+    unsigned Cached(const std::string& key) {
+        const auto it = memo_.find(key);
+        if (it != memo_.end()) return it->second;
+        return memo_[key] = RiskMaskOfKey(key);
+    }
+
+    std::vector<CodeReason>& out_;
+    std::map<std::string, unsigned> memo_;
+    std::map<unsigned, size_t> counts_;
+};
+
+void CollectExprNames(const Expr* root, RiskCollector& risks) {
+    std::vector<const Expr*> stack{root};
+    while (!stack.empty()) {
+        const Expr* e = stack.back();
+        stack.pop_back();
+        if (!e) continue;
+        const bool named = e->kind == Expr::K::Var || e->kind == Expr::K::Member || e->kind == Expr::K::Call ||
+                           e->kind == Expr::K::MethodCall || e->kind == Expr::K::New;
+        if (named) risks.Name(e->text, e->pos);
+        // Syntactic pass, independent of the type walk: a callee or "Новый" type that is on no allowlist table.
+        const std::string key = AllowlistKey(e->text);
+        if ((e->kind == Expr::K::Call && !Allowed().globals.count(key)) ||
+            (e->kind == Expr::K::New && !Allowed().news.count(key)) ||
+            (e->kind == Expr::K::MethodCall && !Allowed().methods.count(key))) {
+            risks.Add(kRiskUnknown, e->pos);
+        }
+        for (const ExprP& a : e->args) stack.push_back(a.get());
+    }
+}
+
+void CollectBodyNames(const Body& root, RiskCollector& risks) {
+    std::vector<const Body*> stack{&root};
+    while (!stack.empty()) {
+        const Body* b = stack.back();
+        stack.pop_back();
+        for (const StmtP& st : b->stmts) {
+            if (!st) continue;
+            if (!st->var.empty()) risks.Name(st->var, st->pos);
+            for (const ExprP& e : st->exprs) CollectExprNames(e.get(), risks);
+            for (const Body& blk : st->blocks) stack.push_back(&blk);
+        }
+    }
+}
+
+// A byte of an identifier in the key text: ASCII letters, digits, '_' and the lead bytes of Cyrillic (U+0400-047F).
+// Any other non-ASCII character counts as a boundary (fail closed: it cannot hide a word).
+bool IsIdentByte(unsigned char c) {
+    return (c >= '0' && c <= '9') || (c >= 'A' && c <= 'Z') || (c >= 'a' && c <= 'z') || c == '_' || c == 0xD0 ||
+           c == 0xD1;
+}
+
+// Invisible characters that split a word for a reader but not for the platform.
+bool IsInvisibleCodePoint(unsigned long u) {
+    return u == 0x00AD || u == 0x034F || u == 0x061C || u == 0x180E || (u >= 0x200B && u <= 0x200F) ||
+           (u >= 0x202A && u <= 0x202E) || (u >= 0x2060 && u <= 0x206F) || u == 0x2800 || u == 0x3164 ||
+           u == 0xFE0F || u == 0xFEFF || (u >= 0xE0001 && u <= 0xE007F) ||
+           (u < 0x20 && u != 10 && u != 13 && u != 9);
+}
+
+// Drops them (a blank would split the word). Handles UTF-16 units (Windows) and code points (Linux) alike.
+std::wstring DropInvisible(const std::wstring& in) {
+    std::wstring out;
+    for (size_t i = 0; i < in.size(); ++i) {
+        const unsigned long u = static_cast<unsigned long>(in[i]);
+        if (u == 0xDB40 && i + 1 < in.size() && static_cast<unsigned long>(in[i + 1]) >= 0xDC00 &&
+            static_cast<unsigned long>(in[i + 1]) <= 0xDC7F) {   // U+E0000..E007F as a surrogate pair
+            ++i;
+            continue;
+        }
+        if (!IsInvisibleCodePoint(u)) out.push_back(in[i]);
+    }
+    return out;
+}
+
+void ScanRawKey(const std::string& text, RiskCollector& risks);
+
+// Last resort for text the tokenizer refuses (an Unknown token): every rule is searched for in the whole normalised
+// text, strings and comments included, with word boundaries for Exact / Prefix. Positions are unknown (1:1).
+void ScanRawText(const std::string& utf8, RiskCollector& risks) {
+    const std::string base = AllowlistKey(Utf16UnitsToUtf8(DropInvisible(Utf8ToUtf16Units(utf8))));
+    ScanRawKey(base, risks);
+    ScanRawKey(FoldHomoglyphs(base, true), risks);
+    ScanRawKey(FoldHomoglyphs(base, false), risks);
+}
+
+void ScanRawKey(const std::string& text, RiskCollector& risks) {
+    for (const RiskEntry& e : RiskEntries()) {
+        for (size_t p = text.find(e.key); p != std::string::npos; p = text.find(e.key, p + 1)) {
+            const bool left = p == 0 || !IsIdentByte(static_cast<unsigned char>(text[p - 1]));
+            const size_t end = p + e.key.size();
+            const bool right = end >= text.size() || !IsIdentByte(static_cast<unsigned char>(text[end]));
+            if (e.match == RiskMatch::Contains || (left && (e.match == RiskMatch::Prefix || right))) {
+                risks.Add(e.bit, Pos{});
+                break;
+            }
+        }
+    }
+}
+
+std::vector<CodeReason> ScanBodyRisks(const Body& body) {
+    std::vector<CodeReason> out;
+    RiskCollector risks(out);
+    CollectBodyNames(body, risks);
+    return out;
+}
+
 CodeAnalysis Drive(const Body& body, const strict::FieldPolicy& policy, const TokenTable& tokens) {
     size_t work = 0;   // one budget for every walk below
     TypeCheckOptions base;
@@ -232,8 +497,17 @@ CodeAnalysis Drive(const Body& body, const strict::FieldPolicy& policy, const To
             if (!r.canonical.empty()) result.query_canonical[use.text_expr] = r.canonical;
         }
     }
-    result.verdict =
-        result.reasons.empty() && result.missing_tables.empty() ? CodeVerdict::Safe : CodeVerdict::Confirm;
+    // The walk did not complete: nothing it saw can be trusted, so the code may do anything.
+    for (const CodeReason& r : result.reasons) {
+        if (r.code == "C_LIMIT" || r.code == "C_INTERNAL" || r.code == "Q_INTERNAL") {
+            result.risks.push_back(CodeReason{"R_UNKNOWN_EFFECT", r.pos});
+        }
+    }
+    // R_UNKNOWN_EFFECT comes from the walk, the other risks from the names; any risk forces Confirm.
+    MergeRisks(result.risks, ScanBodyRisks(body));
+    result.verdict = result.reasons.empty() && result.missing_tables.empty() && result.risks.empty()
+                         ? CodeVerdict::Safe
+                         : CodeVerdict::Confirm;
     return result;
 }
 
@@ -304,12 +578,92 @@ bool ParseTokenTable(const std::string& policy_json, TokenTable& out) {
     }
 }
 
+std::vector<CodeReason> ScanRisksInSource(const std::string& utf8) {
+    std::vector<CodeReason> raw;
+    try {
+        RiskCollector risks(raw);
+        const std::vector<Token> tokens = Tokenize(utf8);
+        bool refused = utf8.size() > kMaxSourceBytes;
+        for (size_t i = 0; i < tokens.size(); ++i) {
+            const Token& t = tokens[i];
+            const Pos pos{t.pos, t.line, t.col};
+            const bool after_dot = i > 0 && tokens[i - 1].kind == Bt::Dot;
+            const bool after_new = i > 0 && tokens[i - 1].kind == Bt::Keyword && tokens[i - 1].kw == Bk::New;
+            if (t.kind == Bt::Unknown) refused = true;
+            if (t.kind == Bt::Identifier || t.kind == Bt::Keyword) risks.Name(t.text, pos, t.mixed_script);
+            // Syntactic mirror of the tree pass: a callee or "Новый" type that is on no allowlist table.
+            const bool name = t.kind == Bt::Identifier || (t.kind == Bt::Keyword && after_dot);
+            const bool call = i + 1 < tokens.size() && tokens[i + 1].kind == Bt::LParen;
+            const std::string key = AllowlistKey(t.text);
+            if (name && call && !after_new &&
+                !(after_dot ? Allowed().methods.count(key) : Allowed().globals.count(key))) {
+                risks.Add(kRiskUnknown, pos);
+            }
+            if (t.kind == Bt::Keyword && t.kw == Bk::New) {
+                const Token* type = i + 1 < tokens.size() ? &tokens[i + 1] : nullptr;
+                if (!type || type->kind != Bt::Identifier || !Allowed().news.count(AllowlistKey(type->text))) {
+                    risks.Add(kRiskUnknown, pos);   // an unknown type, or a type given as an expression
+                }
+            }
+            // Новый("Тип"): the parser refuses a type name given as a string (C_DYNAMIC_NEW); the gate still shows it.
+            if (t.kind == Bt::Keyword && t.kw == Bk::New && i + 2 < tokens.size() &&
+                tokens[i + 1].kind == Bt::LParen && tokens[i + 2].kind == Bt::String) {
+                risks.Name(tokens[i + 2].value, pos);
+            }
+        }
+        if (refused) ScanRawText(utf8, risks);
+    } catch (...) {
+        raw.assign(1, CodeReason{"R_PROTECTION", Pos{}});   // unreadable text: show the strongest marker
+    }
+    std::vector<CodeReason> out;
+    MergeRisks(out, raw);
+    return out;
+}
+
+std::vector<CodeReason> RefusedCodeRisks(const std::string& utf8, const std::string& parse_error_code) {
+    std::vector<CodeReason> out = ScanRisksInSource(utf8);
+    std::vector<CodeReason> more{CodeReason{"R_UNKNOWN_EFFECT", Pos{}}};   // no tree: nothing is known about the code
+    try {
+        if (parse_error_code == "C_EVAL" || parse_error_code == "C_DYNAMIC_NEW") {
+            more.push_back(CodeReason{"R_PROTECTION", Pos{}});
+            // The text of an evaluated string or a dynamic type name is code: search every string literal, and all of
+            // them joined ("За" + "пись").
+            RiskCollector risks(more);
+            std::string joined;
+            for (const Token& t : Tokenize(utf8)) {
+                if (t.kind != Bt::String) continue;
+                ScanRawText(t.value, risks);
+                joined += t.value;
+            }
+            ScanRawText(joined, risks);
+        }
+    } catch (...) {
+        more.push_back(CodeReason{"R_PROTECTION", Pos{}});
+    }
+    MergeRisks(out, more);
+    return out;
+}
+
+void MergeRisks(std::vector<CodeReason>& into, const std::vector<CodeReason>& more) {
+    for (const CodeReason& r : more) {
+        bool have = false;
+        for (const CodeReason& h : into) have = have || (h.code == r.code && h.pos.offset == r.pos.offset);
+        if (!have) into.push_back(r);
+    }
+}
+
 CodeAnalysis AnalyzeCode(const Body& body, const strict::FieldPolicy& policy, const TokenTable& tokens) {
     try {
         return Drive(body, policy, tokens);
     } catch (...) {
         CodeAnalysis r;
         r.reasons.push_back(CodeReason{"C_INTERNAL", Pos{}});
+        r.risks.push_back(CodeReason{"R_UNKNOWN_EFFECT", Pos{}});
+        try {
+            MergeRisks(r.risks, ScanBodyRisks(body));
+        } catch (...) {
+            r.risks.push_back(CodeReason{"R_PROTECTION", Pos{}});
+        }
         return r;
     }
 }

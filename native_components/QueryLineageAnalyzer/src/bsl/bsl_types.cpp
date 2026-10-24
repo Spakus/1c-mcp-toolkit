@@ -285,6 +285,12 @@ private:
         result_.reasons.push_back(CodeReason{code, pos});
     }
 
+    // A call whose callee the allowlist does not know can do anything, writes included (R_UNKNOWN_EFFECT).
+    void AddUnknownEffect(const Pos& pos) {
+        if (!seen_.insert({"R_UNKNOWN_EFFECT", pos.offset}).second) return;
+        result_.risks.push_back(CodeReason{"R_UNKNOWN_EFFECT", pos});
+    }
+
     // The environment key of a variable. Two spellings that differ only in ё / е are reported.
     std::string VarKey(const std::string& name, const Pos& pos) {
         const std::string key = AllowlistKey(name);
@@ -701,6 +707,7 @@ private:
         const auto it = T().globals.find(AllowlistKey(e.text));
         if (it == T().globals.end()) {
             Add("C_UNKNOWN_IDENT", e.pos);
+            AddUnknownEffect(e.pos);
             return VType();
         }
         const GlobalRule& rule = *it->second;
@@ -729,6 +736,7 @@ private:
         }
         if (!rule) {
             Add("C_UNKNOWN_TYPE", e.pos);
+            AddUnknownEffect(e.pos);
             return VType();
         }
         CheckArity(static_cast<int>(e.args.size()), rule->min_args, rule->max_args, e.pos);
@@ -788,6 +796,7 @@ private:
             for (int i = 1; i <= nargs; ++i) Eval(*e.args[i]);
             const bool context = T().context_names.count(AllowlistKey(recv_expr.text)) != 0;
             Add(context ? "C_UNKNOWN_IDENT" : "C_COMMON_MODULE", recv_expr.pos);
+            AddUnknownEffect(e.pos);
             return VType();
         }
         const VType recv = Eval(recv_expr, true);
@@ -797,10 +806,12 @@ private:
         const MethodRule* rule = nullptr;
         if (recv.ty == Ty::Unknown) {
             Add("C_UNKNOWN_RECEIVER", e.pos);
+            AddUnknownEffect(e.pos);
         } else {
             const auto it = T().methods.find({static_cast<int>(recv.ty), key});
             if (it == T().methods.end()) {
                 Add("C_UNKNOWN_METHOD", e.pos);
+                AddUnknownEffect(e.pos);
             } else {
                 rule = it->second;
             }

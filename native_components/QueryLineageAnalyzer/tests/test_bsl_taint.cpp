@@ -578,3 +578,209 @@ TEST(BslTaint, AnalysisKeepsItsParsedBody) {
     options.bound_tokens = r.bound_tokens;
     CHECK(lineage::bsl::PrintBslCanonicalChecked(r.parsed->body, options).ok);
 }
+
+// ---- Task 26: risk classes ------------------------------------------------------------------------------------
+
+namespace {
+
+bool OnlyRisk(const std::string& code, const char* risk) {
+    const auto r = CheckCodeForTest(kPolicyAB, code);
+    const bool ok = HasRisk(r, risk) && r.verdict == CodeVerdict::Confirm;
+    if (!ok) Dump(code, r);
+    return ok;
+}
+
+}  // namespace
+
+TEST(BslTaint, RiskClasses) {
+    CHECK(HasRisk(CheckCodeForTest(kPolicyAB, "Результат = ХранилищеОбщихНастроек.Загрузить(\"MCPToolkit\", \"Х\");"),
+                  "R_PROTECTION"));
+    CHECK(HasRisk(CheckCodeForTest(kPolicyAB, "ФоновыеЗадания.Выполнить(\"М.П\"); Результат = 1;"), "R_DEFERRED"));
+    CHECK(HasRisk(CheckCodeForTest(kPolicyAB, "ЗаписьЖурналаРегистрации(\"x\"); Результат = 1;"), "R_WRITE"));
+    CHECK(HasRisk(CheckCodeForTest(kPolicyAB, "Результат = СтрокаСоединенияИнформационнойБазы();"), "R_CREDENTIALS"));
+}
+
+TEST(BslTaint, RiskForcesConfirmEvenWhenOtherwiseSafe) {
+    // A variable that only happens to carry a risky name: no reason at all, still a risk and a confirmation.
+    const auto r = CheckCodeForTest(kPolicyAB, "Записать = 1; Результат = Записать;");
+    CHECK(r.reasons.empty());
+    CHECK(HasRisk(r, "R_WRITE"));
+    CHECK(r.verdict == CodeVerdict::Confirm);
+    const auto plain = CheckCodeForTest(kPolicyAB, "Х = 1; Результат = Х;");
+    CHECK(plain.risks.empty());
+    CHECK(plain.verdict == CodeVerdict::Safe);
+}
+
+TEST(BslTaint, RiskNamesAreFoundAfterDotsAndInEveryPosition) {
+    CHECK(OnlyRisk("М = Новый Массив; М.Удалить(0); Результат = 1;", "R_WRITE"));
+    CHECK(OnlyRisk("Результат = Модуль.УстановитьПривилегированныйРежим(Истина);", "R_PROTECTION"));
+    CHECK(OnlyRisk("Результат = Менеджер.Свойство.ПарольПользователя;", "R_CREDENTIALS"));
+    CHECK(OnlyRisk("Для Каждого ФоновыеЗадания Из М Цикл Результат = 1; КонецЦикла;", "R_DEFERRED"));
+    CHECK(OnlyRisk("О = Новый ЗаписьТекста; Результат = 1;", "R_WRITE"));
+    CHECK(OnlyRisk("Р = РегистрыСведений.X.СоздатьНаборЗаписей(); Результат = 1;", "R_WRITE"));
+    CHECK(OnlyRisk("НачатьТранзакцию(); Результат = 1;", "R_WRITE"));
+    CHECK(OnlyRisk("Результат = ОбменДанными.Загрузка;", "R_WRITE"));
+    CHECK(OnlyRisk("С = Новый Структура; С.ОбменДанными = Новый Структура(\"Загрузка\", Истина); Результат = 1;",
+                   "R_WRITE"));
+}
+
+TEST(BslTaint, RiskNamesFoldCaseYoAndEnglish) {
+    CHECK(OnlyRisk("Результат = хранилищеобщихнастроек.Загрузить(\"a\", \"b\");", "R_PROTECTION"));
+    CHECK(OnlyRisk("Результат = CommonSettingsStorage.Load(\"a\", \"b\");", "R_PROTECTION"));
+    CHECK(OnlyRisk("Результат = commonsettingsstorage.Load(\"a\", \"b\");", "R_PROTECTION"));
+    CHECK(OnlyRisk("Результат = InfoBaseConnectionString();", "R_CREDENTIALS"));
+    CHECK(OnlyRisk("Результат = BackgroundJobs.Execute(\"M.P\");", "R_DEFERRED"));
+    CHECK(OnlyRisk("WriteLogEvent(\"x\"); Результат = 1;", "R_WRITE"));
+    CHECK(OnlyRisk("Результат = ВладелецФормы;", "R_PROTECTION"));
+    // ё folds to е in the table too ("ПОМЕЧЕН" style names carry no ё here; use a name with е that is typed with ё).
+    CHECK(OnlyRisk("Результат = ЭтотОбъект.Метод();", "R_PROTECTION"));
+    CHECK(OnlyRisk("Результат = ЭтотОбъект;", "R_PROTECTION"));
+}
+
+TEST(BslTaint, RiskScanRunsWhenTheParserRefuses) {
+    // Parser refusals (C_EVAL, C_PARSE, C_DYNAMIC_NEW) leave no tree; the token scan still reports the markers.
+    auto r = CheckCodeForTest(kPolicyAB, "Выполнить(\"1\"); ЗаписьЖурналаРегистрации(\"x\");");
+    CHECK(HasCodeReason(r, "C_EVAL"));
+    CHECK(HasRisk(r, "R_WRITE"));
+    r = CheckCodeForTest(kPolicyAB, "Процедура П() ПоместитьВоВременноеХранилище(1); КонецПроцедуры");
+    CHECK(HasRisk(r, "R_WRITE"));
+    r = CheckCodeForTest(kPolicyAB, "О = Новый(\"ЗаписьТекста\"); Результат = 1;");
+    CHECK(HasCodeReason(r, "C_DYNAMIC_NEW"));
+    CHECK(HasRisk(r, "R_WRITE"));
+    r = CheckCodeForTest(kPolicyAB, "ДобавитьОбработчик А.Б, В; Результат = 1;");
+    CHECK(HasRisk(r, "R_DEFERRED"));
+    // Identifiers that mix Latin and Cyrillic are refused by the parser; the homoglyph fold still names the class.
+    CHECK(HasRisk(CheckCodeForTest(kPolicyAB, "С = Новый HTTPСоединение(\"x\"); Результат = 1;"), "R_CREDENTIALS"));
+    CHECK(HasRisk(CheckCodeForTest(kPolicyAB, "Результат = XранилищеОбщихНастроек.Загрузить(\"a\", \"b\");"),
+                  "R_PROTECTION"));
+    CHECK(HasRisk(CheckCodeForTest(kPolicyAB, "С = Новый COMОбъект(\"x\"); Результат = 1;"), "R_CREDENTIALS"));
+}
+
+TEST(BslTaint, RiskScanFallsBackToRawTextOnUnknownTokens) {
+    // A block comment is an Unknown token for the lexer: the whole text is searched, comments and strings included.
+    auto r = CheckCodeForTest(kPolicyAB, "/* x */ Результат = 1; // ok\n/* ЗаписьТекста */");
+    CHECK(HasRisk(r, "R_WRITE"));
+    // A zero-width character inside a word does not hide it.
+    r = CheckCodeForTest(kPolicyAB, std::string("{ Зап\xE2\x80\x8B") + "исать(1) }");
+    CHECK(HasRisk(r, "R_WRITE"));
+    // Word boundaries apply to short names in the raw scan: "Reset" is not "Set*".
+    r = CheckCodeForTest(kPolicyAB, "{ Reset }");
+    CHECK(!HasRisk(r, "R_WRITE"));
+}
+
+TEST(BslTaint, OldDangerousWordsMapToARiskOrAReject) {
+    // The words of the host's ПроверитьОпасныеСлова: each is a risk class (or a reject for the eval primitives).
+    const char* words[] = {"Удалить", "Delete", "Записать", "Write", "УстановитьПривилегированныйРежим",
+                           "SetPrivilegedMode", "ПодключитьВнешнююКомпоненту", "AttachAddIn",
+                           "УстановитьВнешнююКомпоненту", "InstallAddIn", "COMОбъект", "COMObject",
+                           "УстановитьМонопольныйРежим", "SetExclusiveMode", "УдалитьФайлы", "DeleteFiles",
+                           "КопироватьФайл", "CopyFile", "ПереместитьФайл", "MoveFile", "СоздатьКаталог",
+                           "CreateDirectory", "ЗапуститьПриложение", "RunApp", "КомандаСистемы", "System"};
+    for (const char* w : words) {
+        const std::string call = std::string("Результат = ") + w + "(1);";
+        const std::string member = std::string("Результат = М.") + w + "(1);";
+        const auto a = CheckCodeForTest(kPolicyAB, call);
+        const auto b = CheckCodeForTest(kPolicyAB, member);
+        const bool ok = !a.risks.empty() && !b.risks.empty() && a.verdict == CodeVerdict::Confirm &&
+                        b.verdict == CodeVerdict::Confirm;
+        if (!ok) std::cout << "  no risk for: " << w << std::endl;
+        CHECK(ok);
+    }
+    CHECK(HasCodeReason(CheckCodeForTest(kPolicyAB, "Выполнить(\"1\");"), "C_EVAL"));
+    CHECK(HasCodeReason(CheckCodeForTest(kPolicyAB, "Результат = Вычислить(\"1\");"), "C_EVAL"));
+    CHECK(HasCodeReason(CheckCodeForTest(kPolicyAB, "Execute(\"1\");"), "C_EVAL"));
+    CHECK(HasCodeReason(CheckCodeForTest(kPolicyAB, "Результат = Eval(\"1\");"), "C_EVAL"));
+}
+
+TEST(BslTaint, LegitimateQueryFlowHasNoRisks) {
+    const std::string code = std::string(kQ) +
+        "Т = З.Выполнить().Выгрузить(); М = Новый Массив;\n"
+        "Для Каждого Стр Из Т Цикл М.Добавить(Новый Структура(\"С, Имя\", Стр.С, Стр.Имя)); КонецЦикла;\n"
+        "Результат = М;";
+    const auto r = CheckCodeForTest(kPolicyAB, code);
+    CHECK(r.risks.empty());
+    CHECK(r.verdict == CodeVerdict::Safe);
+}
+
+TEST(BslTaint, UnknownCalleeCarriesUnknownEffectRisk) {
+    CHECK(HasRisk(CheckCodeForTest(kPolicyAB, "Результат = МойМодуль.Сделать(1);"), "R_UNKNOWN_EFFECT"));
+    CHECK(HasRisk(CheckCodeForTest(kPolicyAB, "Результат = НеизвестнаяФункция(1);"), "R_UNKNOWN_EFFECT"));
+    CHECK(HasRisk(CheckCodeForTest(kPolicyAB, "Х = ПолучитьЧто(); Результат = Х.Сделать();"), "R_UNKNOWN_EFFECT"));
+    CHECK(HasRisk(CheckCodeForTest(kPolicyAB, "О = Новый МойТип(1); Результат = 1;"), "R_UNKNOWN_EFFECT"));
+    CHECK(HasRisk(CheckCodeForTest(kPolicyAB, "М = Новый Массив; Результат = М.Сделать();"), "R_UNKNOWN_EFFECT"));
+    // A property read without a call is a reason only.
+    const auto r = CheckCodeForTest(kPolicyAB, "М = Новый Массив; Результат = М.Свойство;");
+    CHECK(HasCodeReason(r, "C_UNKNOWN_MEMBER"));
+    CHECK(!HasRisk(r, "R_UNKNOWN_EFFECT"));
+}
+
+TEST(BslTaint, RefusedCodeAlwaysCarriesUnknownEffect) {
+    CHECK(HasRisk(CheckCodeForTest(kPolicyAB, "Процедура П() КонецПроцедуры"), "R_UNKNOWN_EFFECT"));
+    CHECK(HasRisk(CheckCodeForTest(kPolicyAB, "Результат = ;"), "R_UNKNOWN_EFFECT"));
+    // The walk gave up: C_LIMIT carries it too.
+    std::string deep = "Результат = ";
+    for (int i = 0; i < 50; ++i) deep += "(1 + ";
+    deep += "1";
+    for (int i = 0; i < 50; ++i) deep += ")";
+    deep += ";";
+    const auto r = CheckCodeForTest(kPolicyAB, deep);
+    if (HasCodeReason(r, "C_LIMIT")) CHECK(HasRisk(r, "R_UNKNOWN_EFFECT"));
+}
+
+TEST(BslTaint, SyntacticUnknownCalleePass) {
+    // Independent of the type walk: a callee or type on no allowlist table.
+    auto r = CheckCodeForTest(kPolicyAB, "Х = Новый ТаблицаЗначений; Результат = Х.Колонки.Добавить(\"а\");");
+    CHECK(HasRisk(r, "R_UNKNOWN_EFFECT"));
+    r = CheckCodeForTest(kPolicyAB, "Результат = СокрЛП(\"а\");");
+    CHECK(!HasRisk(r, "R_UNKNOWN_EFFECT"));
+    // The same on text the parser refuses: identifier + "(", "Новый X".
+    CHECK(HasRisk(CheckCodeForTest(kPolicyAB, "Процедура П() Чужая(1); КонецПроцедуры"), "R_UNKNOWN_EFFECT"));
+    // The Запрос method is the allowlist's own: no write risk from the Установить* family.
+    const auto q = CheckCodeForTest(kPolicyAB, "З = Новый Запрос; З.УстановитьПараметр(\"П\", 1); Результат = 1;");
+    CHECK(!HasRisk(q, "R_WRITE"));
+    CHECK(!HasRisk(q, "R_UNKNOWN_EFFECT"));
+}
+
+TEST(BslTaint, RiskFamiliesAndAddedNames) {
+    CHECK(OnlyRisk("Результат = УстановитьЧто(1);", "R_WRITE"));
+    CHECK(OnlyRisk("Результат = УдалитьЧто(1);", "R_WRITE"));
+    CHECK(OnlyRisk("Результат = ЗаписатьЧто(1);", "R_WRITE"));
+    CHECK(OnlyRisk("Результат = ПолучитьCOMОбъект(\"x\");", "R_CREDENTIALS"));
+    CHECK(OnlyRisk("Результат = GetCOMObject(\"x\");", "R_CREDENTIALS"));
+    CHECK(OnlyRisk("Результат = ЗначениеВФайл(\"x\", 1);", "R_WRITE"));
+    CHECK(OnlyRisk("Результат = ValueToFile(\"x\", 1);", "R_WRITE"));
+    CHECK(OnlyRisk("Результат = ЗначениеИзФайла(\"x\");", "R_CREDENTIALS"));
+    CHECK(OnlyRisk("Результат = ПолучитьПеременнуюСреды(\"x\");", "R_CREDENTIALS"));
+    CHECK(OnlyRisk("Результат = УстановитьЧасовойПояс(\"x\");", "R_WRITE"));
+    CHECK(OnlyRisk("Результат = УстановитьРежимСовместимости(1);", "R_WRITE"));
+    CHECK(OnlyRisk("Результат = УстановитьПараметрыСеанса(1);", "R_WRITE"));
+    CHECK(OnlyRisk("Результат = ПланыОбмена.X.УдалитьРегистрациюИзменений(1);", "R_WRITE"));
+    CHECK(OnlyRisk("Результат = ПересчитатьИтоги();", "R_WRITE"));
+    CHECK(OnlyRisk("Результат = ЗавершитьСеанс(1);", "R_PROTECTION"));
+    CHECK(OnlyRisk("Результат = РасширенияКонфигурации.Получить();", "R_PROTECTION"));
+}
+
+TEST(BslTaint, EvalAndDynamicNewScanTheirStrings) {
+    auto r = CheckCodeForTest(kPolicyAB, "Выполнить(\"ФоновыеЗадания.Выполнить()\");");
+    CHECK(HasRisk(r, "R_PROTECTION"));
+    CHECK(HasRisk(r, "R_DEFERRED"));
+    r = CheckCodeForTest(kPolicyAB, "О = Новый(Тип(\"ЗаписьТекста\")); Результат = 1;");
+    CHECK(HasRisk(r, "R_PROTECTION"));
+    CHECK(HasRisk(r, "R_WRITE"));
+    r = CheckCodeForTest(kPolicyAB, "О = Новый(\"Запи\" + \"сать\"); Результат = 1;");
+    CHECK(HasRisk(r, "R_PROTECTION"));
+    CHECK(HasRisk(r, "R_WRITE"));
+}
+
+TEST(BslTaint, InvisibleAndLookalikeCharacters) {
+    const char* invisible[] = {"\xCD\x8F", "\xD8\x9C", "\xE1\xA0\x8E", "\xE2\x81\xA6", "\xE2\x81\xAF", "\xE3\x85\xA4",
+                               "\xEF\xB8\x8F", "\xE2\xA0\x80", "\xF3\xA0\x80\x81", "\xF3\xA0\x81\xBF"};
+    for (const char* ch : invisible) {
+        const auto r = CheckCodeForTest(kPolicyAB, std::string("{ Зап") + ch + "исать(1) }");
+        if (!HasRisk(r, "R_WRITE")) std::cout << "  hidden by an invisible character" << std::endl;
+        CHECK(HasRisk(r, "R_WRITE"));
+    }
+    // Greek and Ukrainian twins of Latin letters.
+    CHECK(HasRisk(CheckCodeForTest(kPolicyAB, "{ \xCE\x97\xCE\xA4\xCE\xA4\xCE\xA1 }"), "R_CREDENTIALS"));        // ΝΤΤΡ
+    CHECK(HasRisk(CheckCodeForTest(kPolicyAB, "Результат = \xD0\x85ystem(1);"), "R_PROTECTION"));   // Ѕystem
+}
