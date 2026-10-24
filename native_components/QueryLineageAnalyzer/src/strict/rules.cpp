@@ -1,7 +1,10 @@
 #include "strict/rules.h"
 
+#include <set>
 #include <string>
 #include <vector>
+
+#include "strict/ast_dump.h"
 
 namespace lineage::strict {
 
@@ -33,12 +36,17 @@ bool IsComparison(const std::string& op) {
 
 bool IsLogicalOp(const std::string& op) { return op == "И" || op == "ИЛИ" || op == "AND" || op == "OR"; }
 
+bool Untainted(Origin o) { return o == Origin::Open || o == Origin::Client; }
+
 class RuleEngine {
 public:
     RuleEngine(const FieldPolicy& policy, const LabelTable& labels, AnalysisResult& out)
         : policy_(policy), labels_(labels), out_(out) {}
 
     void Run(const Batch& batch) {
+        for (const Statement& st : batch.statements) {
+            if (st.kind == Statement::K::Select && st.select) statements_.insert(st.select.get());
+        }
         for (const Statement& st : batch.statements) {
             if (st.kind == Statement::K::Select && st.select) CheckSelect(*st.select);
         }
@@ -53,6 +61,7 @@ private:
     const FieldPolicy& policy_;
     const LabelTable& labels_;
     AnalysisResult& out_;
+    std::set<const Select*> statements_;   // the statement-level selects (ИТОГИ is considered only there)
 
     void Add(const char* code, const Pos& pos) {
         for (const Reason& r : out_.reasons) {
@@ -120,6 +129,45 @@ private:
     // A literal as an ordering / grouping item may be read by the platform as a column ordinal.
     void CheckOrdinal(const ExprP& e) {
         if (e && IsLiteral(*e)) Add("Q_ORDER_PROTECTED", e->pos);
+    }
+
+    // УПОРЯДОЧИТЬ ПО <n>: true when `e` is a plain ordinal (1..N, no leading zero) of a result column whose label is
+    // open or client, i.e. the ordering is the one by that column. Every column must be enumerable (no wildcard).
+    bool OrdinalOfOpenColumn(const Select& s, const Expr& e) const {
+        if (e.kind != Expr::K::NumberLit || e.text.empty() || e.text.size() > 4 || e.text[0] == '0') return false;
+        size_t n = 0;
+        for (const char c : e.text) {
+            if (c < '0' || c > '9') return false;
+            n = n * 10 + static_cast<size_t>(c - '0');
+        }
+        const auto it = labels_.select_columns.find(&s);
+        if (it == labels_.select_columns.end() || it->second.size() != s.items.size()) return false;
+        for (const SelectItem& item : s.items) {
+            if (item.wildcard) return false;
+        }
+        if (n == 0 || n > it->second.size()) return false;
+        const Origin o = it->second[n - 1].origin;
+        return (o == Origin::Open || o == Origin::Client) && it->second[n - 1].refs_known &&
+               PresentationsOpen(it->second[n - 1].refs);
+    }
+
+    // Ordering by a reference: the platform documentation states only that АВТОУПОРЯДОЧИВАНИЕ replaces a reference by
+    // the default sort fields of its table (код / наименование / дата); it does not say that a plain УПОРЯДОЧИТЬ ПО,
+    // an ordinal or ИТОГИ ПО avoid the presentation, and ТаблицаЗначений.Сортировать without a comparison object
+    // compares "элементы остальных типов ... по строковому представлению". So any ordering by a reference is
+    // allowed only when every target's presentation is open (fail closed).
+    bool PresentationsOpen(const std::vector<std::string>& targets) const {
+        for (const std::string& t : targets) {
+            if (!policy_.HasTable(t) || policy_.PresentationClass(t) != FieldClass::Open) return false;
+        }
+        return true;
+    }
+
+    bool OrdersByHiddenPresentation(const ExprP& e) const {
+        if (!e) return false;
+        const auto it = labels_.expr.find(e.get());
+        // unlabelled, or a value that may be a reference with unknown targets: fail closed
+        return it == labels_.expr.end() || !it->second.refs_known || !PresentationsOpen(it->second.refs);
     }
 
     void MirrorResolution() {
@@ -210,12 +258,65 @@ private:
         }
     }
 
+    bool HasRefs(const Expr* e) const {
+        const auto it = labels_.expr.find(e);
+        // unlabelled, a reference, or a value that may be one: fail closed
+        return it == labels_.expr.end() || !it->second.refs_known || !it->second.refs.empty();
+    }
+
+    // A ИТОГИ ПО item that names one result column (a single-part path equal to exactly one result name).
+    static bool NamesResultColumn(const Expr& e, const std::vector<std::string>& names) {
+        if (e.kind != Expr::K::Field || e.parts.size() != 1) return false;
+        size_t folded = 0;
+        bool exact = false;
+        for (const std::string& n : names) {
+            if (FoldedKey(n) != FoldedKey(e.parts[0])) continue;
+            ++folded;
+            exact = exact || ScopeKey(n) == ScopeKey(e.parts[0]);
+        }
+        return folded == 1 && exact;
+    }
+
+    // ИТОГИ adds rows computed from the detail rows only when nothing about the query is protected: every result
+    // column open or client, the row set not chosen by protected data, the grouping items returned columns (open, or
+    // references whose every target has an open presentation), the aggregates СУММА / СРЕДНЕЕ / КОЛИЧЕСТВО / МИНИМУМ / МАКСИМУМ over open non-reference data.
+    // ОБЩИЕ, ИЕРАРХИЯ, ПЕРИОДАМИ, ПЕРВЫЕ, ПОМЕСТИТЬ and a subquery keep the refusal (Q_TOTALS).
+    bool TotalsAllowed(const Select& s) const {
+        if (!statements_.count(&s) || !s.into.empty() || !s.top.empty() || s.totals_by.empty()) return false;
+        if (FlagOf(labels_.rows_protected, s) || FlagOf(labels_.result_protected, s)) return false;
+        const auto it = labels_.select_columns.find(&s);
+        if (it == labels_.select_columns.end() || it->second.size() != s.items.size()) return false;
+        for (const SelectItem& item : s.items) {
+            if (item.wildcard) return false;
+        }
+        for (const Column& c : it->second) {
+            if (!Untainted(c.origin)) return false;
+        }
+        std::vector<std::string> names;
+        if (!ComputeResultNames(s, names)) return false;
+        for (const TotalsItem& t : s.totals_by) {
+            if (t.overall || t.hierarchy || t.only_hierarchy || t.periods || !t.expr) return false;
+            if (!NamesResultColumn(*t.expr, names) || !Untainted(LabelOf(t.expr.get()))) return false;
+            if (OrdersByHiddenPresentation(t.expr)) return false;   // totals rows are ordered by the grouping
+        }
+        for (const ExprP& a : s.totals_aggregates) {
+            if (!a || a->kind != Expr::K::Call || !Untainted(LabelOf(a.get()))) return false;
+            const CallClass c = ClassifyCall(a->text);
+            if (c != CallClass::Count && c != CallClass::Sum && c != CallClass::MinMax) return false;
+            for (const ExprP& x : a->args) {
+                if (!x || !Untainted(LabelOf(x.get())) || HasRefs(x.get())) return false;
+            }
+        }
+        return true;
+    }
+
     bool AutoorderTainted(const Select& s) const {
         const auto it = labels_.select_columns.find(&s);
         if (it == labels_.select_columns.end()) return true;
         for (const Column& c : it->second) {
             if (Tainted(c.origin) || c.origin == Origin::Unknown) return true;
             // automatic ordering sorts a reference by its presentation
+            if (!c.refs_known) return true;   // may be a reference whose targets were lost
             for (const std::string& target : c.refs) {
                 if (!policy_.HasTable(target) || policy_.PresentationClass(target) != FieldClass::Open) return true;
             }
@@ -250,11 +351,11 @@ private:
         bool ordering = false;
         for (const OrderItem& o : s.order_by) {
             WalkOpt(o.expr, Ctx::OrderBy, s.pos);
-            if (o.expr && IsLiteral(*o.expr)) {
+            if (o.expr && IsLiteral(*o.expr) && !OrdinalOfOpenColumn(s, *o.expr)) {
                 CheckOrdinal(o.expr);
                 ordering = true;
             }
-            if (TaintedExpr(o.expr)) {
+            if (TaintedExpr(o.expr) || OrdersByHiddenPresentation(o.expr)) {
                 Add("Q_ORDER_PROTECTED", o.expr->pos);
                 ordering = true;
             }
@@ -265,7 +366,7 @@ private:
         }
         if (ordering && !s.top.empty()) Add("Q_TOP_WITH_ORDER", s.pos);
 
-        if (s.has_totals) Add("Q_TOTALS", s.pos);
+        if (s.has_totals && !TotalsAllowed(s)) Add("Q_TOTALS", s.pos);
         for (const ExprP& a : s.totals_aggregates) WalkOpt(a, Ctx::Totals, s.pos);
         for (const TotalsItem& t : s.totals_by) {
             if (t.periods) Add("Q_PERIODS", s.pos);

@@ -169,6 +169,7 @@ FieldLabel Dereference(std::vector<std::string> tables, const std::vector<std::s
         if (last) {
             label.origin = tables.empty() || broken ? Origin::Unknown : Combine(inter, origin);
             if (label.origin == Origin::Unknown) label.refs.clear();
+            label.refs_known = label.origin != Origin::Unknown;   // the policy lists the targets of every field
             return label;
         }
         if (broken || next.empty()) return FieldLabel();
@@ -188,6 +189,7 @@ FieldLabel ResolveInBinding(const Binding& b, const std::vector<std::string>& pa
         FieldLabel label;
         label.origin = col->origin;
         label.refs = col->refs;
+        label.refs_known = col->refs_known;
         return label;
     }
     if (col->refs.empty()) return FieldLabel();

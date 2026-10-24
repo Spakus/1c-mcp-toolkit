@@ -154,10 +154,15 @@ std::string DerivedResultAlias(const Expr& e) {
     } else {
         for (size_t i = 1; i < e.parts.size(); ++i) name += e.parts[i];
     }
-    // Printable only as a plain identifier: a keyword (Т.Ссылка) or a name that does not lex as one token
-    // cannot follow КАК, and a mixed-script name is never produced.
+    // Printable only as a plain identifier or as one of the path keywords a column alias may be (Т.Ссылка is named
+    // Ссылка): any other keyword or a name that does not lex as one token cannot follow КАК, and a mixed-script
+    // name is never produced.
     const std::vector<Token> toks = Tokenize(name);
-    if (toks.size() != 2 || toks[0].kind != Tk::Identifier || toks[0].text != name) return std::string();
+    if (toks.size() != 2 || toks[1].kind != Tk::End || toks[0].text != name) return std::string();
+    const bool keyword_alias = toks[0].kind == Tk::Keyword &&
+                               (toks[0].kw == Kw::Refs || toks[0].kw == Kw::Presentation ||
+                                toks[0].kw == Kw::RefPresentation || toks[0].kw == Kw::Value);
+    if (toks[0].kind != Tk::Identifier && !keyword_alias) return std::string();
     bool latin = false;
     bool cyrillic = false;
     for (const char ch : name) {

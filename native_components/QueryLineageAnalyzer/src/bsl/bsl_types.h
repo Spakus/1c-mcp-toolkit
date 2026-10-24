@@ -69,7 +69,10 @@ struct ColumnInfo {
     bool name_collision = false;     // another column differs only in ё / е; not compared
     std::vector<std::string> refs;   // target tables when the column holds a reference (non-empty => Ty::Ref)
     Origin origin = Origin::Unknown; // label of the column's values (CheckQuery)
-    bool operator==(const ColumnInfo& o) const { return refs == o.refs && origin == o.origin; }
+    bool refs_known = false;         // `refs` is complete; false: may be a reference whose targets were lost
+    bool operator==(const ColumnInfo& o) const {
+        return refs == o.refs && origin == o.origin && refs_known == o.refs_known;
+    }
 };
 
 // Columns of a query result / value table / row, keyed by AllowlistKey. Immutable once built.

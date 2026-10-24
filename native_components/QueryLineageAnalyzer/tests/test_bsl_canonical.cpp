@@ -176,6 +176,18 @@ TEST(BslCanonical, RefusesWhatTheParserCannotReadBack) {
     CHECK_EQ(CodeOfPrint(b), std::string("C_PRINT_REPARSE"));
 }
 
+TEST(BslCanonical, ChainOnNewQueryPrintsWithoutParentheses) {
+    CheckRoundTrip("А = Новый Запрос(\"ВЫБРАТЬ 1\").Выполнить().Выгрузить();");
+    CHECK_EQ(PrintedOrEmpty("А = (Новый Запрос(\"ВЫБРАТЬ 1\")).Выполнить();"),
+             std::string("А = Новый Запрос(\"ВЫБРАТЬ 1\").Выполнить();\n"));
+    // A hand-built index on "Новый Запрос(...)" has no textual form the parser accepts.
+    ExprP n = Mk(Expr::K::New, "Запрос");
+    n->has_parens = true;
+    CHECK_EQ(CodeOfPrint(AssignBody(Mk(Expr::K::Index, "", {n, Mk(Expr::K::Var, "Б")}))), std::string("C_PRINT_REPARSE"));
+    ExprP bare = Mk(Expr::K::New, "Запрос");
+    CHECK_EQ(CodeOfPrint(AssignBody(Mk(Expr::K::MethodCall, "Выполнить", {bare}))), std::string("C_PRINT_REPARSE"));
+}
+
 TEST(BslCanonical, DepthAndSizeCaps) {
     ExprP e = Mk(Expr::K::Var, "А");
     for (int i = 0; i < 300; ++i) e = Mk(Expr::K::Unary, "-", {e});

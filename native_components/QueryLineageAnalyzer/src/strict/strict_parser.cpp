@@ -651,7 +651,9 @@ SelectItem P::ItemClause() {
     }
     it.expr = Expr();
     if (AcceptKw(Kw::As)) {
-        it.alias = AliasName();
+        // A column may be named like an allowlisted path keyword (КАК Ссылка): after КАК it cannot start anything else.
+        if (Peek().kind == Tk::Keyword && IsAllowedKeywordSegment(Peek().kw)) it.alias = Next().text;
+        else it.alias = AliasName();
         it.alias_explicit = true;
     } else if (Peek().kind == Tk::Identifier) {
         it.alias = AliasName();

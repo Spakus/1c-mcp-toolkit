@@ -291,11 +291,14 @@ private:
         }
     }
     // Receiver of '.', '[' and method calls: only forms the parser accepts before a postfix operator unwrapped.
+    // "Новый Запрос(...)" is accepted before '.' only; before '[' the re-parse refuses it (fail closed).
     static bool IsPostfixBase(const Expr& e) {
         switch (e.kind) {
             case Expr::K::Var: case Expr::K::Member: case Expr::K::Index: case Expr::K::Call:
             case Expr::K::MethodCall: case Expr::K::Ternary:
                 return true;
+            case Expr::K::New:
+                return IsChainableNew(e);
             default:
                 return false;
         }

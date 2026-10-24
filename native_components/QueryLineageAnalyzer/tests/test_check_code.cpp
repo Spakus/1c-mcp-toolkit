@@ -156,6 +156,42 @@ TEST(CheckCode, UnloadedColumnIsAnArrayOfThatColumn) {
     CHECK_EQ(Label(j, "$[*]"), std::string("protected"));
 }
 
+// A cell of an open column without reference targets, moved as is, is "open" wherever it lands (as a table cell is):
+// the masker applies its reference rule to the serialized value by shape, whatever the label.
+TEST(CheckCode, OpenColumnCellWithoutTargetsIsOpen) {
+    const std::string q =
+        "З = Новый Запрос(\"ВЫБРАТЬ Б.Сумма КАК Сумма, Б.Ссылка КАК С ИЗ Справочник.Б КАК Б\");\n"
+        "В = З.Выполнить().Выбрать(); В.Следующий(); Т = З.Выполнить().Выгрузить();\n";
+    const Json s = Check(q + "Х = В.Сумма; Результат = Новый Структура(\"Сумма, С, Т\", Х, В.С, Т[0].Сумма);");
+    CHECK_EQ(Verdict(s), std::string("safe"));
+    CHECK_EQ(Label(s, "$.Сумма"), std::string("open"));
+    CHECK_EQ(Label(s, "$.С"), std::string("ref"));
+    CHECK_EQ(Label(s, "$.Т"), std::string("open"));
+    const Json root = Check(q + "Результат = В.Сумма;");
+    CHECK_EQ(Verdict(root), std::string("safe"));
+    CHECK_EQ(Label(root, "$"), std::string("open"));
+    const Json col = Check(q + "Результат = Т.ВыгрузитьКолонку(\"Сумма\");");
+    CHECK_EQ(Verdict(col), std::string("safe"));
+    CHECK_EQ(Label(col, "$[*]"), std::string("open"));
+    const Json map = Check(q + "Результат = Новый Соответствие; Результат.Вставить(\"к\", В.Сумма);");
+    CHECK_EQ(Verdict(map), std::string("safe"));
+    CHECK_EQ(Label(map, "$[*].value"), std::string("open"));
+    // Joined with another cell on two paths: still a cell. Joined with a computed value: not.
+    const Json joined = Check(q + "Если В.Сумма = 1 Тогда Х = В.Сумма; Иначе Х = Т[0].Сумма; КонецЕсли; Результат = Х;");
+    CHECK_EQ(Label(joined, "$"), std::string("open"));
+    const Json mixed = Check(q + "Если В.Сумма = 1 Тогда Х = В.Сумма; Иначе Х = В; КонецЕсли; Результат = Х;");
+    CHECK_EQ(Verdict(mixed), std::string("confirm"));
+    // Anything but a move keeps the old rule: the value may still be a reference whose presentation is read.
+    for (const char* code : {"Результат = Строка(В.Сумма);", "Результат = \"x\" + В.Сумма;",
+                             "М = Новый Массив; М.Добавить(В.Сумма); Результат = М[0];",
+                             "Результат = Новый Структура(\"К\", Т.ВыгрузитьКолонку(\"Сумма\")[0]);"}) {
+        CHECK_EQ(Verdict(Check(q + code)), std::string("confirm"));
+    }
+    // A protected column stays protected, a tainted holder taints the cell.
+    const Json prot = Check(std::string(kQuery) + "В = З.Выполнить().Выбрать(); В.Следующий(); Результат = В.Имя;");
+    CHECK_EQ(Label(prot, "$"), std::string("protected"));
+}
+
 TEST(CheckCode, MapIsAnArrayOfKeyValueEntries) {
     const Json j = Check(std::string(kQuery) + "Т = З.Выполнить().Выгрузить();\n"
                          "М = Новый Соответствие; М.Вставить(\"к\", Т[0].Имя); Результат = М;");

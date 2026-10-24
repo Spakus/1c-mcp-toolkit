@@ -124,6 +124,16 @@ TEST(BslParser, Expressions) {
     CHECK(!ParseBsl("А = Б[0](1);").ok);
     CHECK(!ParseBsl("А = ?(1, 2);").ok);
     CHECK(!ParseBsl("А = Новый Массив.Количество();").ok);  // no postfix directly on Новый
+    // ... except a member chain on "Новый Запрос(...)" (the object is never bound, so it cannot escape).
+    CHECK(ParseBsl("А = Новый Запрос(\"ВЫБРАТЬ 1\").Выполнить().Выгрузить();").ok);
+    CHECK(ParseBsl("А = Новый Query(\"ВЫБРАТЬ 1\").Execute().Select().Следующий();").ok);
+    CHECK_EQ(DumpBslExpr(*ParseBsl("А = Новый Запрос(\"x\").Выполнить();").body.stmts[0]->exprs[1]),
+             DumpBslExpr(*ParseBsl("А = Новый Запрос(\"x\").Выполнить();").body.stmts[0]->exprs[1]));
+    for (const char* bad : {"А = Новый Запрос.Выполнить();", "А = Новый Массив(1).Количество();",
+                            "А = Новый Запрос(\"x\")[0];", "А = Новый Запрос(\"x\")(1);",
+                            "Новый Запрос(\"x\").Выполнить();", "А = Новый Структура(\"К\", 1).К;"}) {
+        CHECK(!ParseBsl(bad).ok);
+    }
     CHECK(!ParseBsl("А = (1;").ok);
     CHECK(!ParseBsl("А = 1 2;").ok);
 }

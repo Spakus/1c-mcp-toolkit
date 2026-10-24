@@ -113,6 +113,7 @@ public:
                 info.name = c.name;
                 info.origin = c.origin;
                 info.refs = c.refs;
+                info.refs_known = c.refs_known;
                 const std::string name = AllowlistKey(c.name);
                 const auto existing = set.columns.find(name);
                 if (existing == set.columns.end()) {
@@ -158,9 +159,12 @@ private:
     static void MergeInto(ColumnInfo& into, const ColumnInfo& other) {
         into.origin = JoinOrigin(into.origin, other.origin);
         if (into.refs.empty() || other.refs.empty()) {
+            const bool lost = !into.refs.empty() || !other.refs.empty();   // a reference on one side only
+            into.refs_known = into.refs_known && other.refs_known && !lost;
             into.refs.clear();
             return;
         }
+        into.refs_known = into.refs_known && other.refs_known;
         for (const std::string& r : other.refs) {
             bool have = false;
             for (const std::string& h : into.refs) have = have || h == r;

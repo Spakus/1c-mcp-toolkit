@@ -43,6 +43,11 @@ ParseResult ParseBsl(const std::string& utf8, bool allow_reserved = false);
 // is safe on arbitrary caller-built trees. ParseBsl runs it on its own result.
 bool ValidateBody(const Body& body, ParseError& err, bool allow_reserved = false);
 
+// "Новый Запрос(...)" / "Новый Query(...)" with parentheses: the only "Новый" a member chain may follow
+// (Новый Запрос(Текст).Выполнить().Выгрузить()). The object is never bound to a name, so it cannot escape; the parser
+// accepts a '.' right after it and the printer writes it as a postfix base without parentheses.
+bool IsChainableNew(const Expr& e);
+
 // Deterministic S-expression dump (tests, round-trip property). Recursive: call it only on validated trees.
 std::string DumpBsl(const Body& body);
 std::string DumpBslExpr(const Expr& e);

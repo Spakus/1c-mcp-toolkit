@@ -1,5 +1,4 @@
 // kind: code
 // expect: safe
-// pending: Q_PARSE_EXPECTED: the same alias Ссылка, inside a query text of a code snippet.
 З = Новый Запрос("ВЫБРАТЬ Реализация.Ссылка КАК Ссылка ИЗ Документ.Реализация КАК Реализация");
 Результат = З.Выполнить().Выгрузить();

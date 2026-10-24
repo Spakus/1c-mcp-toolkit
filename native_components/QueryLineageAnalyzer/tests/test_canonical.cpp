@@ -149,12 +149,38 @@ TEST(Canonical, ResultNamesAreExplicitAndPositional) {
                          "\n\tNULL КАК Поле4\nИЗ\n\tСправочник.А КАК Т"));
 }
 
-TEST(Canonical, KeywordDerivedNamesFallBackToPosition) {
+TEST(Canonical, KeywordDerivedNamesKeepTheKeyword) {
+    // An allowlisted path keyword is a valid column name after КАК, so the platform's own name is kept.
     CHECK_EQ(Canon("ВЫБРАТЬ Т.Ссылка, Т.Представление ИЗ Справочник.А КАК Т"),
-             std::string("ВЫБРАТЬ\n\tТ.Ссылка КАК Поле1,\n\tТ.Представление КАК Поле2\nИЗ\n\tСправочник.А КАК Т"));
+             std::string("ВЫБРАТЬ\n\tТ.Ссылка КАК Ссылка,\n\tТ.Представление КАК Представление\nИЗ\n\tСправочник.А КАК Т"));
+    // Uniqueness: a second Ссылка gets a suffix, an explicit alias keeps its name wherever it stands.
+    CHECK_EQ(Canon("ВЫБРАТЬ А.Ссылка, Б.ссылка, 1 КАК Ссылка2 ИЗ Справочник.А КАК А, Справочник.Б КАК Б"),
+             std::string("ВЫБРАТЬ\n\tА.Ссылка КАК Ссылка,\n\tБ.ссылка КАК ссылка1,\n\t1 КАК Ссылка2\nИЗ\n\t"
+                         "Справочник.А КАК А,\n\tСправочник.Б КАК Б"));
+    CHECK_EQ(Canon("ВЫБРАТЬ Т.Ссылка, 1 КАК Ссылка ИЗ Справочник.А КАК Т"),
+             std::string("ВЫБРАТЬ\n\tТ.Ссылка КАК Ссылка1,\n\t1 КАК Ссылка\nИЗ\n\tСправочник.А КАК Т"));
+    RoundTrip("ВЫБРАТЬ Т.Ссылка, Т.Значение, Т.ПредставлениеСсылки ИЗ Справочник.А КАК Т");
+    // A keyword that is not a path keyword never becomes a name (it cannot be a segment anyway).
     // Latin + Cyrillic derived name: positional name instead of a refusal.
     CHECK_EQ(Canon("ВЫБРАТЬ Т.Ссылка.abc ИЗ Справочник.А КАК Т"),
              std::string("ВЫБРАТЬ\n\tТ.Ссылка.abc КАК Поле1\nИЗ\n\tСправочник.А КАК Т"));
+}
+
+TEST(Canonical, KeywordColumnAliasIsPrintedAsWritten) {
+    CHECK_EQ(Canon("ВЫБРАТЬ Т.Ссылка КАК Ссылка, Т.А КАК представление ИЗ Справочник.А КАК Т"),
+             std::string("ВЫБРАТЬ\n\tТ.Ссылка КАК Ссылка,\n\tТ.А КАК представление\nИЗ\n\tСправочник.А КАК Т"));
+    RoundTrip("ВЫБРАТЬ Т.Ссылка КАК Ссылка, Т.Б КАК ПредставлениеСсылки, Т.Г КАК Значение ИЗ Справочник.А КАК Т");
+    RoundTrip("ВЫБРАТЬ 1 КАК А ОБЪЕДИНИТЬ ВЫБРАТЬ 2 КАК Значение");
+    RoundTrip("ВЫБРАТЬ Т.Ссылка КАК Ссылка ПОМЕСТИТЬ ВТ ИЗ Справочник.А КАК Т; ВЫБРАТЬ ВТ.Ссылка КАК Ссылка ИЗ ВТ КАК ВТ");
+    // A keyword alias collides with an equal explicit name like any other.
+    auto a = ParseBatchStrict("ВЫБРАТЬ 1 КАК Ссылка, 2 КАК ссылка");
+    CHECK(a.ok);
+    CHECK_EQ(PrintCanonicalChecked(a.batch).error.code, std::string("Q_PRINT_DUPLICATE_COLUMN"));
+    // A hand-built alias that is any other keyword is refused.
+    auto b = ParseBatchStrict("ВЫБРАТЬ 1 КАК Х");
+    CHECK(b.ok);
+    b.batch.statements[0].select->items[0].alias = "Тип";
+    CHECK_EQ(PrintCanonicalChecked(b.batch).error.code, std::string("Q_PRINT_IDENT"));
 }
 
 TEST(Canonical, DuplicateDerivedNamesGetSuffixes) {

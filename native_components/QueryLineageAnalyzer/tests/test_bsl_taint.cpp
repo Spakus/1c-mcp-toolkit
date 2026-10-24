@@ -784,3 +784,81 @@ TEST(BslTaint, InvisibleAndLookalikeCharacters) {
     CHECK(HasRisk(CheckCodeForTest(kPolicyAB, "{ \xCE\x97\xCE\xA4\xCE\xA4\xCE\xA1 }"), "R_CREDENTIALS"));        // ΝΤΤΡ
     CHECK(HasRisk(CheckCodeForTest(kPolicyAB, "Результат = \xD0\x85ystem(1);"), "R_PROTECTION"));   // Ѕystem
 }
+
+// ТаблицаЗначений.Сортировать with a literal list of open columns only reorders rows the client receives anyway. A
+// sort the checker cannot prove so is refused like an unknown method (C_UNKNOWN_METHOD, R_UNKNOWN_EFFECT).
+TEST(BslTaint, SortByLiteralOpenColumns) {
+    const std::string q =
+        "З = Новый Запрос(\"ВЫБРАТЬ Б.Сумма КАК Сумма, Б.Код КАК Код, Б.СсылкаНаА КАК С, 1 КАК Л ИЗ Справочник.Б КАК Б\");\n"
+        "Т = З.Выполнить().Выгрузить();\n";
+    CHECK(Safe(q + "Т.Сортировать(\"Сумма\"); Результат = Т;"));
+    CHECK(Safe(q + "Т.Сортировать(\"Сумма Убыв, код возр,Л\"); Результат = Т;"));
+    CHECK(Safe(q + "Т.Sort(\"Сумма DESC, Код Asc\"); Результат = Т;"));
+    const auto ok = CheckCodeForTest(kPolicyAB, q + "Т.Сортировать(\"Сумма\"); Результат = Т;");
+    CHECK(!HasRisk(ok, "R_UNKNOWN_EFFECT"));
+    for (const char* bad : {
+             "Т.Сортировать(\"С\");",                 // a reference: sorted by a protected presentation
+             "Т.Сортировать(\"Нет\");",               // not a column
+             "Т.Сортировать(\"Сумма Вниз\");",        // not a direction
+             "Т.Сортировать(\"Сумма Убыв Возр\");",
+             "Т.Сортировать(\"Сумма,\");",
+             "Т.Сортировать(\"\");",
+             "Т.Сортировать(\"Сумма.Код\");",
+             "Т.Сортировать(\"Сумма\", 1);",          // a comparison object
+             "К = \"Сумма\"; Т.Сортировать(К);",      // not a literal
+         }) {
+        const auto r = CheckCodeForTest(kPolicyAB, q + bad + " Результат = Т;");
+        if (r.verdict != CodeVerdict::Confirm) Dump(q + bad, r);
+        CHECK(r.verdict == CodeVerdict::Confirm);
+    }
+    CHECK(Denied(q + "Т.Сортировать(\"С\"); Результат = Т;", "C_UNKNOWN_METHOD"));
+    CHECK(HasRisk(CheckCodeForTest(kPolicyAB, q + "Т.Сортировать(\"С\"); Результат = Т;"), "R_UNKNOWN_EFFECT"));
+    CHECK(Denied(q + "Т.Сортировать(\"Нет\"); Результат = Т;", "C_UNKNOWN_METHOD"));
+    // A protected column, a table whose columns are not known, a sort under a protected condition.
+    CHECK(Denied(std::string(kQ) + "Т = З.Выполнить().Выгрузить(); Т.Сортировать(\"Имя\"); Результат = 1;",
+                 "C_UNKNOWN_METHOD"));
+    CHECK(Denied("Т = Новый ТаблицаЗначений; Т.Сортировать(\"А\"); Результат = 1;", "C_UNKNOWN_METHOD"));
+    CHECK(Denied(std::string(kQ) + "Т = З.Выполнить().Выгрузить(); Если Т[0].Имя = 1 Тогда Т.Сортировать(\"С\"); "
+                 "КонецЕсли; Результат = 1;", "C_IMPLICIT_FLOW"));
+    // A reference column is accepted when every target's presentation is open.
+    const auto open = FieldPolicy::FromJson(R"({"version":1,"tables":{
+        "Справочник.О": {"presentation": "open", "fields": {"Ссылка": {"class": "open", "refs": ["Справочник.О"]}}}}})");
+    CHECK(open.ok);
+    const auto r = CheckCodeForTest(open.policy,
+        "З = Новый Запрос(\"ВЫБРАТЬ О.Ссылка КАК С ИЗ Справочник.О КАК О\"); Т = З.Выполнить().Выгрузить();\n"
+        "Т.Сортировать(\"С\"); Результат = Т;");
+    CHECK(r.verdict == CodeVerdict::Safe);
+}
+
+// A text made only of string literals joined with "+" (any grouping) is folded; through a variable it is not (the
+// attack corpus pins that: c_query_text_from_variable), and Символы is reserved, so Символы.ПС never reaches it.
+TEST(BslTaint, LiteralOnlyQueryTextIsFolded) {
+    const auto r = CheckCodeForTest(kPolicyAB,
+        "Т = Новый Запрос(\"ВЫБРАТЬ Б.Сумма КАК Сумма \" + (\"ИЗ Справочник.Б\" + \" КАК Б\")).Выполнить().Выгрузить();\n"
+        "Результат = Т;");
+    CHECK(r.verdict == CodeVerdict::Safe);
+    CHECK_EQ(r.query_texts.size(), static_cast<size_t>(1));
+    CHECK_EQ(r.query_texts[0].text, std::string("ВЫБРАТЬ Б.Сумма КАК Сумма ИЗ Справочник.Б КАК Б"));
+    CHECK(Denied("Т = \"ВЫБРАТЬ 1\"; З = Новый Запрос(\"\" + Т); Результат = 1;", "C_DYNAMIC_QUERY"));
+    CHECK(Denied("З = Новый Запрос(\"ВЫБРАТЬ 1\" + 2); Результат = 1;", "C_DYNAMIC_QUERY"));
+    CHECK(HasCodeReason(CheckCodeForTest(kPolicyAB, "З = Новый Запрос(\"ВЫБРАТЬ\" + Символы.ПС + \"1\"); Результат = 1;"),
+                        "C_RESERVED"));
+}
+
+// A chain on "Новый Запрос(<text>)" is typed like the same steps on a variable; the query is never bound.
+TEST(BslTaint, ChainOnNewQuery) {
+    const auto r = CheckCodeForTest(kPolicyAB,
+        "Т = Новый Запрос(\"ВЫБРАТЬ Б.Сумма КАК Сумма ИЗ Справочник.Б КАК Б\").Выполнить().Выгрузить(); Результат = Т;");
+    CHECK(r.verdict == CodeVerdict::Safe);
+    CHECK_EQ(r.query_texts.size(), static_cast<size_t>(1));
+    CHECK_EQ(r.query_canonical.size(), static_cast<size_t>(1));
+    CHECK(Safe("В = Новый Запрос(\"ВЫБРАТЬ Б.Сумма КАК Сумма ИЗ Справочник.Б КАК Б\").Выполнить().Выбрать();\n"
+               "Пока В.Следующий() Цикл Результат = В.Сумма; КонецЦикла;"));
+    CHECK(Denied("Результат = Новый Запрос(\"ВЫБРАТЬ 1\").Выполнить().Выгрузить()[0][0];", "C_UNKNOWN_INDEX"));
+    CHECK(Denied("Т = \"ВЫБРАТЬ 1\"; Результат = Новый Запрос(Т).Выполнить().Выгрузить();", "C_DYNAMIC_QUERY"));
+    CHECK(Denied("Результат = Новый Запрос(\"ВЫБРАТЬ 1\").Текст;", "C_UNKNOWN_MEMBER"));
+    CHECK(Denied("Результат = Новый Запрос(\"ВЫБРАТЬ А.Имя КАК Имя ИЗ Справочник.А КАК А ГДЕ А.Имя = \"\"x\"\"\").Выполнить()"
+                 ".Выгрузить();", "Q_EQ_LITERAL"));
+    // A chain that ends on the Запрос itself is an escape like any other use of it as a value.
+    CHECK(Denied("Х = Новый Массив; Х.Добавить(Новый Запрос(\"ВЫБРАТЬ 1\")); Результат = 1;", "C_QUERY_ESCAPES"));
+}

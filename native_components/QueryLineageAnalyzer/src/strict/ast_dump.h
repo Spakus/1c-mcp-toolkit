@@ -17,8 +17,8 @@ std::string DumpExpr(const Expr& e, bool fill_result_names = false);
 std::string DumpBatch(const Batch& b, bool fill_result_names = false);
 
 // The name an unaliased Field item gets (last segment for 1-2 parts, concatenation of the segments after the
-// first for 3+ parts). Empty for every other expression, and when the name cannot be printed as a plain
-// identifier (a keyword such as Ссылка, or a Latin/Cyrillic mix).
+// first for 3+ parts). Empty for every other expression, and when the name cannot follow КАК: a keyword other than
+// the four path keywords (Ссылка, Представление, ПредставлениеСсылки, Значение are kept), or a Latin/Cyrillic mix.
 std::string DerivedResultAlias(const Expr& e);
 
 // Final result column names of a query head, in output order (the names the canonical text carries after КАК):

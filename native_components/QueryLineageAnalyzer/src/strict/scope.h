@@ -38,6 +38,7 @@ struct Column {
     std::string name;                   // final result name
     Origin origin = Origin::Unknown;
     std::vector<std::string> refs;      // target tables when the column holds a reference
+    bool refs_known = false;            // see FieldLabel::refs_known
 };
 
 struct Binding {
@@ -60,6 +61,12 @@ struct Scope {
 struct FieldLabel {
     Origin origin = Origin::Unknown;
     std::vector<std::string> refs;
+    // true: `refs` lists every reference target the value may have (empty: provably not a reference), as for a policy
+    // field path, a literal or a primitive-typed operation. false (the default, fail closed): the value may be a
+    // reference whose targets were lost (ВЫРАЗИТЬ to a reference type, ЗНАЧЕНИЕ, a parameter, ЕСТЬNULL / ВЫБОР /
+    // МИНИМУМ / МАКСИМУМ over such a value, an ОБЪЕДИНИТЬ of a reference and a non-reference); its presentation is
+    // not known, so nothing may be ordered by it.
+    bool refs_known = false;
 };
 
 // Sink for everything resolution discovers.

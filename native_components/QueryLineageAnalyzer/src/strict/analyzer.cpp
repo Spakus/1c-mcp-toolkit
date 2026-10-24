@@ -5,6 +5,7 @@
 
 #include "strict/ast_dump.h"
 #include "strict/rules.h"
+#include "utf_utils.h"
 
 namespace lineage::strict {
 
@@ -33,6 +34,7 @@ void Consume(SelectOut& r) {
     if (!r.grouped) return;
     for (Column& c : r.columns) {
         if (c.origin != Origin::Unknown) c.origin = JoinOrigin(c.origin, Origin::ProtectedDerived);
+        if (!c.refs.empty()) c.refs_known = false;   // the targets are dropped, not the reference
         c.refs.clear();
     }
 }
@@ -117,6 +119,7 @@ private:
             label.name = result.columns[i].name;
             label.origin = result.columns[i].origin;
             label.refs = result.columns[i].refs;
+            label.refs_known = result.columns[i].refs_known;
             if (i < result.positions.size()) label.pos = result.positions[i];
             out_.columns.push_back(std::move(label));
         }
@@ -196,7 +199,7 @@ private:
             if (!p) continue;
             const bool period_slot = p->kind == Expr::K::Field && p->parts.size() == 1 && IsPeriodName(p->parts[0]) &&
                                      policy_.Field(src.name, p->parts[0]) == nullptr;
-            if (period_slot) labels_.expr[p.get()] = Plain(Origin::Open);
+            if (period_slot) labels_.expr[p.get()] = Plain(Origin::Open, true);
             else Label(*p, vt_scope, depth, nullptr);
             if (SubtreeTainted(p)) b.rows_protected = true;
         }
@@ -240,35 +243,48 @@ private:
             case Expr::K::NumberLit:
             case Expr::K::BoolLit:
             case Expr::K::NullLit:
-            case Expr::K::UndefinedLit: return Plain(Origin::Client);
-            case Expr::K::ValueFn:
-            case Expr::K::TypeFn: return Plain(Origin::Open);
+            case Expr::K::UndefinedLit: return Plain(Origin::Client, true);
+            case Expr::K::ValueFn: return Plain(Origin::Open, false);   // ЗНАЧЕНИЕ(Справочник.А.Пустая) is a reference
+            case Expr::K::TypeFn: return Plain(Origin::Open, true);
             case Expr::K::Call: return LabelCall(e, scope, depth, aliases);
             case Expr::K::Unset: return FieldLabel();
             default: break;
         }
         if (e.kind == Expr::K::Cast) return LabelCast(e, scope, depth, aliases);
-        // Unary, Binary, Case, InList, InSubquery, InHierarchy, Between, Like, IsNullTest, RefsTest, Row
+        // Unary, Binary, Case, InList, InSubquery, InHierarchy, Between, Like, IsNullTest, RefsTest, Row. Only ВЫБОР
+        // returns one of its operands; the others yield a number, a string or a Boolean.
         std::vector<FieldLabel> operands = LabelOperands(e, scope, depth, aliases);
-        return Plain(DerivedFrom(operands));
+        return Plain(DerivedFrom(operands), e.kind != Expr::K::Case || PassesNoReference(operands));
+    }
+
+    // A value chosen among `operands` (ВЫБОР, ЕСТЬNULL, МИНИМУМ / МАКСИМУМ) is provably not a reference only when
+    // none of them may be one; its targets are not tracked otherwise.
+    static bool PassesNoReference(const std::vector<FieldLabel>& operands) {
+        for (const FieldLabel& o : operands) {
+            if (!o.refs_known || !o.refs.empty()) return false;
+        }
+        return true;
     }
 
     // Casting a reference to a non-reference type may expose its presentation (unverified platform behaviour):
-    // Unknown when the operand holds a reference or a parameter of unknown type. A reference target type is a
-    // dotted name (Справочник.А); everything else (Строка, Число, Дата, Булево) is not.
+    // Unknown when the operand holds or may hold a reference (a parameter of unknown type, a value whose targets were
+    // lost). A reference target type is a dotted name (Справочник.А); everything else (Строка, Число, Дата, Булево) is
+    // not, and the result of a cast to it is not a reference; a cast to a reference type has unknown targets.
     FieldLabel LabelCast(const Expr& e, const Scope& scope, int depth, const AliasInfo* aliases) {
         const std::vector<FieldLabel> operands = LabelOperands(e, scope, depth, aliases);
         const bool to_reference = e.type_name.find('.') != std::string::npos;
         if (!to_reference && !e.args.empty() && e.args[0] &&
-            (!operands[0].refs.empty() || e.args[0]->kind == Expr::K::Param)) {
+            (!operands[0].refs.empty() || !operands[0].refs_known || e.args[0]->kind == Expr::K::Param)) {
             return FieldLabel();
         }
-        return Plain(DerivedFrom(operands));
+        return Plain(DerivedFrom(operands), !to_reference);
     }
 
-    static FieldLabel Plain(Origin origin) {
+    // `refs_known`: true when the value is provably not a reference (FieldLabel::refs_known).
+    static FieldLabel Plain(Origin origin, bool refs_known) {
         FieldLabel l;
         l.origin = origin;
+        l.refs_known = refs_known;
         return l;
     }
 
@@ -288,14 +304,14 @@ private:
             const ExprP& a = e.args[i];
             if (a && static_cast<int>(i) == period_index && a->kind == Expr::K::Field && a->parts.size() == 1 &&
                 IsPeriodName(a->parts[0])) {
-                out.push_back(Plain(Origin::Open));   // a period constant, not a field lookup
+                out.push_back(Plain(Origin::Open, true));   // a period constant, not a field lookup
             } else if (a) out.push_back(Label(*a, scope, depth, aliases));
             else out.push_back(FieldLabel());   // a null operand is malformed: Unknown
         }
         if (e.subquery) {
             SelectOut sub = AnalyzeSelect(*e.subquery, &scope, depth + 1, false);
             Consume(sub);
-            out.push_back(Plain(SubqueryOrigin(sub)));
+            out.push_back(Plain(SubqueryOrigin(sub), false));
         }
         return out;
     }
@@ -321,6 +337,7 @@ private:
                 if (i < aliases->columns->size()) {
                     l.origin = (*aliases->columns)[i].origin;
                     l.refs = (*aliases->columns)[i].refs;
+                    l.refs_known = (*aliases->columns)[i].refs_known;
                 }
                 return l;
             }
@@ -330,8 +347,9 @@ private:
 
     FieldLabel LabelParam(const Expr& e) {
         switch (policy_.OriginOfParam(e.text)) {
-            case ParamOrigin::Client: return Plain(Origin::Client);
-            case ParamOrigin::TokenProtected: return Plain(Origin::ProtectedDirect);   // equality operand (Task 17)
+            // A parameter may be a reference whose targets are not known.
+            case ParamOrigin::Client: return Plain(Origin::Client, false);
+            case ParamOrigin::TokenProtected: return Plain(Origin::ProtectedDirect, false);   // equality operand (Task 17)
             case ParamOrigin::TokenUnknown: break;
             case ParamOrigin::Missing: sink_.Issue(kResolveUnknownParam, e.pos); break;
         }
@@ -341,16 +359,21 @@ private:
     FieldLabel LabelCall(const Expr& e, const Scope& scope, int depth, const AliasInfo* aliases) {
         const std::vector<FieldLabel> operands = LabelOperands(e, scope, depth, aliases, PeriodArgIndex(e.text));
         switch (ClassifyCall(e.text)) {
-            case CallClass::Count: return Plain(Origin::Open);   // a number, not stored data
+            case CallClass::Count: return Plain(Origin::Open, true);   // a number, not stored data
             case CallClass::TypeOf: {
                 // a type name is public, but the choice of the type may depend on a protected value
                 const bool open = operands.size() == 1 &&
                                   (operands[0].origin == Origin::Open || operands[0].origin == Origin::Client);
-                return Plain(open ? Origin::Open : DerivedFrom(operands));
+                return Plain(open ? Origin::Open : DerivedFrom(operands), true);
             }
-            case CallClass::Sum:
-            case CallClass::MinMax:
-            case CallClass::Plain: return Plain(DerivedFrom(operands));
+            case CallClass::Sum: return Plain(DerivedFrom(operands), true);   // a number
+            case CallClass::MinMax: return Plain(DerivedFrom(operands), PassesNoReference(operands));
+            case CallClass::Plain: {
+                // ЕСТЬNULL returns one of its arguments; the other functions return a number, a string or a date.
+                const std::string key = NormalizeIdentifierKey(e.text);
+                const bool chooses = key == "ЕСТЬNULL" || key == "ISNULL";
+                return Plain(DerivedFrom(operands), !chooses || PassesNoReference(operands));
+            }
             case CallClass::Presentation: return LabelPresentation(e, operands);
             case CallClass::Unrecognized: break;
         }
@@ -389,14 +412,14 @@ private:
         if (!x.refs.empty()) {
             Origin o = PresentationOfTargets(x.refs);
             if (x.origin != Origin::Open && x.origin != Origin::Client) o = JoinOrigin(o, Transform(x.origin));
-            return Plain(o);
+            return Plain(o, true);   // a string
         }
-        if (kind == Expr::K::StringLit || kind == Expr::K::NumberLit || kind == Expr::K::BoolLit) return Plain(x.origin);
+        if (kind == Expr::K::StringLit || kind == Expr::K::NumberLit || kind == Expr::K::BoolLit) return Plain(x.origin, true);
         // No known target: a public-looking operand may still hold a reference (a parameter, a column whose
         // targets were lost), whose presentation is stored data. Only operands that are protected anyway are
         // a plain function over protected data.
         if (x.origin == Origin::Open || x.origin == Origin::Client) return FieldLabel();
-        return Plain(Transform(x.origin));
+        return Plain(Transform(x.origin), true);
     }
 
     void Walk(const ExprP& e, const Scope& scope, int depth, const AliasInfo* aliases = nullptr) {
@@ -484,6 +507,7 @@ private:
                 const FieldLabel l = Label(*item.expr, scope, depth, nullptr);
                 col.origin = l.origin;
                 col.refs = l.refs;
+                col.refs_known = l.refs_known;
             }
             out.columns.push_back(std::move(col));
             out.positions.push_back(item.pos);
@@ -497,6 +521,7 @@ private:
             for (Column& c : head.columns) {
                 c.origin = Origin::Unknown;
                 c.refs.clear();
+                c.refs_known = false;
             }
             head.complete = false;
             return;
@@ -505,9 +530,13 @@ private:
             head.columns[i].origin = JoinOrigin(head.columns[i].origin, part.columns[i].origin);
             // Targets survive only when BOTH sides are references; otherwise a dereference would be a guess.
             if (head.columns[i].refs.empty() || part.columns[i].refs.empty()) {
+                // A reference joined with a non-reference may be a reference with unknown targets.
+                const bool lost = !head.columns[i].refs.empty() || !part.columns[i].refs.empty();
+                head.columns[i].refs_known = head.columns[i].refs_known && part.columns[i].refs_known && !lost;
                 head.columns[i].refs.clear();
                 continue;
             }
+            head.columns[i].refs_known = head.columns[i].refs_known && part.columns[i].refs_known;
             for (const std::string& r : part.columns[i].refs) {
                 bool have = false;
                 for (const std::string& h : head.columns[i].refs) have = have || ScopeKey(h) == ScopeKey(r);

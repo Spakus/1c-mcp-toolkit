@@ -441,7 +441,8 @@ private:
 
     ExprP Postfix() {
         ExprP e = Primary();
-        if (e->kind == Expr::K::New) return e;   // no member / index / call chain directly on "Новый ..."
+        // No member / index / call chain directly on "Новый ...", except a member chain on "Новый Запрос(...)".
+        if (e->kind == Expr::K::New && (!IsChainableNew(*e) || Peek().kind != Bt::Dot)) return e;
         for (;;) {
             if (Peek().kind == Bt::Dot) {
                 Next();
@@ -669,6 +670,12 @@ bool CheckStmtNode(const Stmt& s, bool in_loop, ParseError& err, bool allow_rese
 }
 
 }  // namespace
+
+bool IsChainableNew(const Expr& e) {
+    if (e.kind != Expr::K::New || !e.has_parens) return false;
+    const std::string key = NormalizeIdentifierKey(e.text);
+    return key == NormalizeIdentifierKey("Запрос") || key == "QUERY";
+}
 
 bool ValidateBody(const Body& body, ParseError& err, bool allow_reserved) {
     std::vector<Work> stack;

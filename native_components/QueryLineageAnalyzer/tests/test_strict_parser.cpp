@@ -204,6 +204,26 @@ TEST(StrictParser, KeywordPathSegmentsRejected) {
                             "ЗНАЧЕНИЕ(Перечисление.Виды.Для)"})
         CHECK_EQ(Code(bad), std::string("Q_PARSE_KEYWORD_SEGMENT"));
 }
+TEST(StrictParser, KeywordColumnAliasOnlyAfterKak) {
+    auto r = ParseBatchStrict("ВЫБРАТЬ Т.Ссылка КАК Ссылка, Т.А КАК представление, Т.Б AS ПредставлениеСсылки, "
+                              "Т.Г КАК Значение ИЗ Справочник.А КАК Т");
+    CHECK(r.ok);
+    const auto& items = r.batch.statements[0].select->items;
+    CHECK_EQ(items.size(), 4u);
+    CHECK(items[0].alias_explicit && items[0].alias == "Ссылка");
+    CHECK(items[1].alias == "представление");
+    CHECK(items[2].alias == "ПредставлениеСсылки");
+    CHECK(items[3].alias == "Значение");
+    // Only the four path keywords, only as the alias of a select item, only after КАК.
+    for (const char* bad : {"ВЫБРАТЬ Т.А КАК Тип ИЗ Справочник.А КАК Т", "ВЫБРАТЬ Т.А КАК ВЫБРАТЬ ИЗ Справочник.А КАК Т",
+                            "ВЫБРАТЬ Т.А Ссылка ИЗ Справочник.А КАК Т", "ВЫБРАТЬ Т.А КАК А ИЗ Справочник.А КАК Ссылка",
+                            "ВЫБРАТЬ Т.А КАК А ПОМЕСТИТЬ Значение ИЗ Справочник.А КАК Т",
+                            "ВЫБРАТЬ Т.А КАК А ИЗ Справочник.А КАК Т ИТОГИ ПО Т.А КАК Ссылка",
+                            "ВЫБРАТЬ Т.А КАК А ИЗ Справочник.А КАК Т УПОРЯДОЧИТЬ ПО Ссылка",
+                            "ВЫБРАТЬ Т.А КАК Ссылка.Х ИЗ Справочник.А КАК Т"}) {
+        CHECK(!ParseBatchStrict(bad).ok);
+    }
+}
 TEST(StrictParser, NotLikeWithEscape) {
     CHECK_EQ(ExprDump("Х НЕ ПОДОБНО \"а\" СПЕЦСИМВОЛ \"~\""), std::string("(!like (f Х) \"а\" \"~\")"));
 }

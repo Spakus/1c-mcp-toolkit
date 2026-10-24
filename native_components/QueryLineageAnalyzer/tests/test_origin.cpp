@@ -601,9 +601,139 @@ TEST(Origin, LegitimateShapesAreSafe) {
         "ВЫБРАТЬ НАЧАЛОПЕРИОДА(Д.Дата, МЕСЯЦ) КАК М ИЗ Документ.Д КАК Д").verdict == Verdict::Safe);
 }
 
-TEST(Origin, OrdinalOrderingAndNonLastResultSets) {
+TEST(Origin, KeywordAliasColumnsResolveThroughTempTables) {
+    auto r = AnalyzeForTest(kPolicyAB,
+        "ВЫБРАТЬ Б.СсылкаНаА КАК Ссылка, Б.Сумма КАК Значение ПОМЕСТИТЬ ВТ ИЗ Справочник.Б КАК Б;"
+        "ВЫБРАТЬ ВТ.Ссылка КАК Ссылка, ВТ.Значение КАК Сумма, ВТ.Ссылка.Имя КАК Имя ИЗ ВТ КАК ВТ");
+    CHECK(r.verdict == Verdict::Safe);
+    CHECK_EQ(r.columns.size(), 3u);
+    CHECK_EQ(r.columns[0].name, std::string("Ссылка"));
+    CHECK_EQ(r.columns[0].origin, Origin::Open);
+    CHECK_EQ(r.columns[0].refs.size(), 1u);
+    CHECK_EQ(r.columns[1].origin, Origin::Open);
+    CHECK_EQ(r.columns[2].origin, Origin::ProtectedDirect);   // the dereference still reads the policy
+}
+
+TEST(Origin, OrderByOrdinalResolvesToTheSelectedColumn) {
+    const char* open_cols = "ВЫБРАТЬ Б.Сумма КАК С, А.Имя КАК Нм ИЗ Справочник.Б КАК Б, Справочник.А КАК А ";
+    CHECK(AnalyzeForTest(kPolicyAB, "ВЫБРАТЬ Б.Сумма КАК С ИЗ Справочник.Б КАК Б УПОРЯДОЧИТЬ ПО 1").verdict ==
+          Verdict::Safe);
+    CHECK(AnalyzeForTest(kPolicyAB, std::string(open_cols) + "УПОРЯДОЧИТЬ ПО 1 УБЫВ").verdict == Verdict::Safe);
+    CHECK(AnalyzeForTest(kPolicyAB,
+        "ВЫБРАТЬ ПЕРВЫЕ 3 Б.Сумма КАК С, Б.Код КАК Кд ИЗ Справочник.Б КАК Б УПОРЯДОЧИТЬ ПО 2, 1").verdict ==
+        Verdict::Safe);
+    // The ordinal of a protected column is ordering by it.
+    CHECK(HasReason(AnalyzeForTest(kPolicyAB, std::string(open_cols) + "УПОРЯДОЧИТЬ ПО 2"), "Q_ORDER_PROTECTED"));
     CHECK(HasReason(AnalyzeForTest(kPolicyAB,
-        "ВЫБРАТЬ Б.Сумма КАК С ИЗ Справочник.Б КАК Б УПОРЯДОЧИТЬ ПО 1"), "Q_ORDER_PROTECTED"));
+        "ВЫБРАТЬ ПЕРВЫЕ 1 А.Имя КАК Нм ИЗ Справочник.А КАК А УПОРЯДОЧИТЬ ПО 1"), "Q_TOP_WITH_ORDER"));
+    // A union column carries the join of every part.
+    CHECK(HasReason(AnalyzeForTest(kPolicyAB,
+        "ВЫБРАТЬ Б.Сумма КАК Х ИЗ Справочник.Б КАК Б ОБЪЕДИНИТЬ ВСЕ ВЫБРАТЬ А.Имя ИЗ Справочник.А КАК А УПОРЯДОЧИТЬ ПО 1"),
+        "Q_ORDER_PROTECTED"));
+    // Not a plain in-range ordinal: out of range, zero, leading zero, fraction, other literal, a wildcard before it.
+    for (const char* tail : {"УПОРЯДОЧИТЬ ПО 3", "УПОРЯДОЧИТЬ ПО 0", "УПОРЯДОЧИТЬ ПО 01", "УПОРЯДОЧИТЬ ПО 1.0",
+                             "УПОРЯДОЧИТЬ ПО \"1\"", "УПОРЯДОЧИТЬ ПО ИСТИНА", "УПОРЯДОЧИТЬ ПО NULL",
+                             "УПОРЯДОЧИТЬ ПО 99999999999999999999"}) {
+        CHECK(HasReason(AnalyzeForTest(kPolicyAB, std::string(open_cols) + tail), "Q_ORDER_PROTECTED"));
+    }
+    CHECK(HasReason(AnalyzeForTest(kPolicyAB, "ВЫБРАТЬ Б.*, Б.Сумма КАК С ИЗ Справочник.Б КАК Б УПОРЯДОЧИТЬ ПО 1"),
+                    "Q_ORDER_PROTECTED"));
+    CHECK(HasReason(AnalyzeForTest(kPolicyAB, "ВЫБРАТЬ Б.Нет КАК С ИЗ Справочник.Б КАК Б УПОРЯДОЧИТЬ ПО 1"),
+                    "Q_ORDER_PROTECTED"));
+    // Grouping and totals by an ordinal stay refused.
+    CHECK(HasReason(AnalyzeForTest(kPolicyAB,
+        "ВЫБРАТЬ Б.Сумма КАК С ИЗ Справочник.Б КАК Б СГРУППИРОВАТЬ ПО 1"), "Q_ORDER_PROTECTED"));
+    CHECK(HasReason(AnalyzeForTest(kPolicyAB,
+        "ВЫБРАТЬ Б.Сумма КАК С ИЗ Справочник.Б КАК Б ИТОГИ ПО 1"), "Q_ORDER_PROTECTED"));
+}
+
+// The documentation does not say that a plain ordering by a reference avoids its presentation (only that
+// АВТОУПОРЯДОЧИВАНИЕ substitutes the default sort fields), so every ordering by a reference needs every target's
+// presentation to be open. Справочник.А and Справочник.Б have protected presentations under kPolicyAB.
+TEST(Origin, OrderingByReferenceNeedsOpenPresentation) {
+    const char* q = "ВЫБРАТЬ Б.Сумма КАК С, Б.СсылкаНаА КАК К ИЗ Справочник.Б КАК Б ";
+    for (const char* tail : {"УПОРЯДОЧИТЬ ПО Б.СсылкаНаА", "УПОРЯДОЧИТЬ ПО К", "УПОРЯДОЧИТЬ ПО 2", "УПОРЯДОЧИТЬ ПО С, К УБЫВ"}) {
+        CHECK(HasReason(AnalyzeForTest(kPolicyAB, std::string(q) + tail), "Q_ORDER_PROTECTED"));
+    }
+    CHECK(HasReason(AnalyzeForTest(kPolicyAB, std::string(q) + "ИТОГИ ПО К"), "Q_TOTALS"));
+    CHECK(HasReason(AnalyzeForTest(kPolicyAB, "ВЫБРАТЬ ПЕРВЫЕ 1 Б.Ссылка КАК К ИЗ Справочник.Б КАК Б УПОРЯДОЧИТЬ ПО К"),
+                    "Q_TOP_WITH_ORDER"));
+    CHECK(AnalyzeForTest(kPolicyAB, std::string(q) + "УПОРЯДОЧИТЬ ПО С").verdict == Verdict::Safe);
+    // A target with an open presentation may be ordered by.
+    auto open = FieldPolicy::FromJson(R"({"version":1,"tables":{
+        "Справочник.О": {"presentation": "open", "fields": {"Ссылка": {"class": "open", "refs": ["Справочник.О"]}}}}})");
+    CHECK(open.ok);
+    for (const char* tail : {"УПОРЯДОЧИТЬ ПО О.Ссылка", "УПОРЯДОЧИТЬ ПО К", "УПОРЯДОЧИТЬ ПО 1", "ИТОГИ ПО К"}) {
+        CHECK(AnalyzeForTest(open.policy, std::string("ВЫБРАТЬ О.Ссылка КАК К ИЗ Справочник.О КАК О ") + tail).verdict ==
+              Verdict::Safe);
+    }
+}
+
+// An expression column may hold a reference whose targets were lost: it is not "provably not a reference".
+TEST(Origin, LostReferenceTargetsAreNotOrderable) {
+    auto open = FieldPolicy::FromJson(R"({"version":1,"tables":{
+        "Справочник.О": {"presentation": "open", "fields": {"Ссылка": {"class": "open", "refs": ["Справочник.О"]},
+                                                          "Ч": {"class": "open"}}}}})");
+    CHECK(open.ok);
+    auto known = [&](const std::string& item) {
+        const AnalysisResult r = AnalyzeForTest(open.policy, "ВЫБРАТЬ " + item + " КАК К ИЗ Справочник.О КАК О");
+        CHECK_EQ(r.columns.size(), 1u);
+        return r.columns[0].refs_known;
+    };
+    for (const char* item : {"О.Ч", "О.Ссылка", "1", "СУММА(О.Ч)", "КОЛИЧЕСТВО(*)", "ЕСТЬNULL(О.Ч, 0)", "МАКСИМУМ(О.Ч)",
+                             "ВЫБОР КОГДА О.Ч > 1 ТОГДА О.Ч ИНАЧЕ 0 КОНЕЦ", "ПОДСТРОКА(\"а\", 1, 1)", "О.Ч = 1",
+                             "ВЫРАЗИТЬ(О.Ч КАК Число(10))", "ТИП(Справочник.О)"}) {
+        if (!known(item)) CHECK_EQ(std::string(item), std::string("refs known"));
+    }
+    for (const char* item : {"&П", "ЗНАЧЕНИЕ(Справочник.О.Пустая)", "ВЫРАЗИТЬ(О.Ч КАК Справочник.О)",
+                             "ЕСТЬNULL(О.Ссылка, 0)", "МАКСИМУМ(О.Ссылка)", "ВЫБОР КОГДА О.Ч > 1 ТОГДА О.Ссылка КОНЕЦ"}) {
+        if (known(item)) CHECK_EQ(std::string(item), std::string("refs unknown"));
+    }
+    // A cast of a possible reference to a string would read its presentation: Unknown.
+    CHECK(AnalyzeForTest(kPolicyAB, "ВЫБРАТЬ ВЫРАЗИТЬ(ЕСТЬNULL(Б.СсылкаНаА, 0) КАК Строка(10)) КАК К ИЗ Справочник.Б КАК Б")
+              .columns.at(0).origin == Origin::Unknown);
+    // A union of a reference and a number has lost its targets; one of two references keeps them.
+    CHECK(!AnalyzeForTest(open.policy, "ВЫБРАТЬ О.Ссылка КАК К ИЗ Справочник.О КАК О ОБЪЕДИНИТЬ ВЫБРАТЬ 1")
+               .columns.at(0).refs_known);
+    CHECK(AnalyzeForTest(open.policy, "ВЫБРАТЬ О.Ссылка КАК К ИЗ Справочник.О КАК О ОБЪЕДИНИТЬ ВЫБРАТЬ О2.Ссылка "
+                                      "ИЗ Справочник.О КАК О2 УПОРЯДОЧИТЬ ПО К").verdict == Verdict::Safe);
+    CHECK(HasReason(AnalyzeForTest(open.policy, "ВЫБРАТЬ ЗНАЧЕНИЕ(Справочник.О.Пустая) КАК К УПОРЯДОЧИТЬ ПО 1"),
+                    "Q_ORDER_PROTECTED"));
+    CHECK(HasReason(AnalyzeForTest(open.policy, "ВЫБРАТЬ О.Ссылка КАК К ИЗ Справочник.О КАК О "
+                                                "ОБЪЕДИНИТЬ ВЫБРАТЬ 1 АВТОУПОРЯДОЧИВАНИЕ"), "Q_ORDER_PROTECTED"));
+}
+
+TEST(Origin, TotalsOverOpenColumnsByReturnedColumns) {
+    const std::string q = "ВЫБРАТЬ Б.СсылкаНаА КАК К, Б.Сумма КАК С, Б.Код КАК Кд ИЗ Справочник.Б КАК Б ";
+    // (К is a reference to Справочник.А, whose presentation is protected: grouping totals by it is refused below.)
+    for (const char* tail : {"ИТОГИ ПО Кд", "УПОРЯДОЧИТЬ ПО Кд ИТОГИ СУММА(С) ПО Кд", "ИТОГИ КОЛИЧЕСТВО(С), МАКСИМУМ(С) ПО Кд, С",
+                             "ИТОГИ КОЛИЧЕСТВО(*), КОЛИЧЕСТВО(РАЗЛИЧНЫЕ Кд) ПО кд КАК Группа"}) {
+        auto r = AnalyzeForTest(kPolicyAB, q + tail);
+        if (r.verdict != Verdict::Safe) CHECK_EQ(std::string(tail) + ": " + r.reasons.at(0).code, std::string("safe"));
+    }
+    // Refused: ОБЩИЕ, a hierarchy, periods, a literal or an expression that is not a returned column, an aggregate
+    // that is not СУММА / СРЕДНЕЕ / КОЛИЧЕСТВО / МИНИМУМ / МАКСИМУМ over open non-reference data, ПЕРВЫЕ.
+    for (const char* tail : {"ИТОГИ СУММА(С) ПО ОБЩИЕ", "ИТОГИ ПО К ИЕРАРХИЯ", "ИТОГИ ПО К ТОЛЬКО ИЕРАРХИЯ",
+                             "ИТОГИ ПО Кд ПЕРИОДАМИ(ДЕНЬ, &П, &П)", "ИТОГИ ПО 1", "ИТОГИ ПО Б.СсылкаНаА",
+                             "ИТОГИ ПО К.Ссылка", "ИТОГИ ПО Сумма", "ИТОГИ ПОДСТРОКА(Кд, 1, 1) ПО К",
+                             "ИТОГИ МАКСИМУМ(К) ПО Кд", "ИТОГИ С ПО К", "ИТОГИ СУММА(С) + 1 ПО К"}) {
+        CHECK(HasReason(AnalyzeForTest(kPolicyAB, q + tail), "Q_TOTALS"));
+    }
+    CHECK(HasReason(AnalyzeForTest(kPolicyAB,
+        "ВЫБРАТЬ ПЕРВЫЕ 2 Б.СсылкаНаА КАК К ИЗ Справочник.Б КАК Б ИТОГИ ПО К"), "Q_TOTALS"));
+    // Protected anywhere: a returned column, a grouping column, the row set.
+    CHECK(HasReason(AnalyzeForTest(kPolicyAB,
+        "ВЫБРАТЬ А.Ссылка КАК С, А.Имя КАК Нм ИЗ Справочник.А КАК А ИТОГИ ПО С"), "Q_TOTALS"));
+    CHECK(HasReason(AnalyzeForTest(kPolicyAB,
+        "ВЫБРАТЬ А.Ссылка КАК С, А.Имя КАК Нм ИЗ Справочник.А КАК А ИТОГИ ПО Нм"), "Q_TOTALS"));
+    CHECK(HasReason(AnalyzeForTest(kPolicyAB, q + "ГДЕ Б.СсылкаНаА.Имя = &П ИТОГИ ПО К"), "Q_TOTALS"));
+    CHECK(HasReason(AnalyzeForTest(kPolicyAB, q + "ОБЪЕДИНИТЬ ВСЕ ВЫБРАТЬ А.Ссылка, 1, А.Имя ИЗ Справочник.А КАК А "
+                                              "ИТОГИ ПО К"), "Q_TOTALS"));
+    CHECK(HasReason(AnalyzeForTest(kPolicyAB, "ВЫБРАТЬ Б.Нет КАК Н, Б.Сумма КАК С ИЗ Справочник.Б КАК Б ИТОГИ ПО С"),
+                    "Q_TOTALS"));
+}
+
+TEST(Origin, OrdinalOrderingAndNonLastResultSets) {
     CHECK(HasReason(AnalyzeForTest(kPolicyAB,
         "ВЫБРАТЬ Б.Сумма КАК С ИЗ Справочник.Б КАК Б СГРУППИРОВАТЬ ПО 1"), "Q_ORDER_PROTECTED"));
     // a non-last statement returning rows is checked like the last one

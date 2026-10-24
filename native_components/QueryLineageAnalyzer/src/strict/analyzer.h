@@ -62,6 +62,7 @@ struct ColumnLabel {
     Origin origin = Origin::Unknown;
     Pos pos;
     std::vector<std::string> refs;      // target tables when the column holds a reference
+    bool refs_known = false;            // `refs` is complete (FieldLabel::refs_known in scope.h)
 };
 
 enum class Verdict { Safe, Confirm };

@@ -102,6 +102,9 @@ struct VType {
     std::set<const Expr*> objs;                  // collections (allocation sites) the value may be
     std::set<std::string> refs;                  // reference targets the value may have
     bool ref_unknown = true;                     // may be a reference with unknown targets
+    // The cell of a query column without reference targets, moved unchanged: the description labels it like a table
+    // cell (bsl_result.cpp Cell), by its column label. It never changes ref_unknown: a presentation read stays Unknown.
+    bool cell = false;
 };
 
 bool SameColumns(const std::shared_ptr<const ColumnSet>& a, const std::shared_ptr<const ColumnSet>& b) {
@@ -112,7 +115,7 @@ bool SameColumns(const std::shared_ptr<const ColumnSet>& a, const std::shared_pt
 bool SameVType(const VType& a, const VType& b) {
     return a.ty == b.ty && a.maybe_unassigned == b.maybe_unassigned && a.site == b.site &&
            SameColumns(a.columns, b.columns) && a.label == b.label && a.objs == b.objs && a.refs == b.refs &&
-           a.ref_unknown == b.ref_unknown;
+           a.ref_unknown == b.ref_unknown && a.cell == b.cell;
 }
 
 VType Typed(Ty ty, Origin label) {
@@ -143,6 +146,7 @@ VType JoinType(const VType& a, const VType& b) {
     r.refs = a.refs;
     r.refs.insert(b.refs.begin(), b.refs.end());
     r.ref_unknown = a.ref_unknown || b.ref_unknown;
+    r.cell = a.cell && b.cell;
     if (a.ty != b.ty) return r;
     if (a.ty == Ty::Query && a.site != b.site) return r;
     r.ty = a.ty;
@@ -358,7 +362,7 @@ private:
         ResultValue value;
         value.ty = v.ty;
         value.label = v.label;
-        value.maybe_ref = MayBeRef(v);
+        value.maybe_ref = MayBeRef(v) && !v.cell;
         value.objs = v.objs;
         value.columns = v.columns;
         DescribeResult(&value, state_, result_);
@@ -393,7 +397,7 @@ private:
                 if (!value.objs.empty()) {
                     s.nested.insert(value.objs.begin(), value.objs.end());
                     if (IsTainted(label) || MayBeRef(value)) s.opaque = true;
-                } else if (MayBeRef(value) && !IsTainted(label)) {
+                } else if (MayBeRef(value) && !IsTainted(label) && !value.cell) {
                     s.opaque = true;
                 } else {
                     JoinInto(s.scalar, label);
@@ -669,10 +673,14 @@ private:
         VType v;
         v.label = c.origin;
         if (IsTainted(holder.label)) v.label = JoinOrigin(v.label, holder.label);
-        if (!c.refs.empty()) {
+        if (!c.refs_known) {
+            v.refs.insert(c.refs.begin(), c.refs.end());   // may be a reference with other targets: Unknown type
+        } else if (!c.refs.empty()) {
             v.ty = Ty::Ref;
             v.refs.insert(c.refs.begin(), c.refs.end());
             v.ref_unknown = false;
+        } else {
+            v.cell = true;   // provably not a reference
         }
         return v;
     }
@@ -953,6 +961,7 @@ private:
             }
             case Ty::ValueTable:
                 if (m == AllowlistKey("ВыгрузитьКолонку")) return UnloadColumn(recv, *e.args[1], e);
+                if (m == AllowlistKey("Сортировать")) return SortTable(recv, *e.args[1], e);
                 return Typed(rule.result, Fresh(ShapeOf(recv)));
             case Ty::Array:
             case Ty::Structure:
@@ -1019,6 +1028,59 @@ private:
         const std::optional<Origin> shape = ShapeOf(table);
         if (shape && IsTainted(*shape)) JoinInto(ol.shape, *shape);
         return v;
+    }
+
+    // Т.Сортировать("<list>"): only the order of rows the client receives anyway changes, so the column labels stay.
+    // Anything not proven so is refused like an unknown method: a list that is not a literal, a column that is not
+    // open, a reference unless every target's presentation is open, a tainted table or pc. The platform reference of
+    // ТаблицаЗначений.Сортировать: without <ОбъектСравнения> "элементы остальных типов сравниваются по строковому
+    // представлению", i.e. references are ordered by their presentation. A column that may hold a reference whose
+    // targets were lost (ColumnInfo::refs_known false) is refused for the same reason.
+    VType SortTable(const VType& table, const Expr& list, const Expr& call) {
+        if (!SortIsOverOpenColumns(table, list)) {
+            Add("C_UNKNOWN_METHOD", call.pos);
+            AddUnknownEffect(call.pos);
+        }
+        return Typed(Ty::Undefined, Origin::Client);
+    }
+
+    bool SortIsOverOpenColumns(const VType& table, const Expr& list) const {
+        if (!table.columns || !IsStringLit(list) || IsTainted(pc_) || IsTainted(table.label)) return false;
+        const std::optional<Origin> shape = ShapeOf(table);
+        if (shape && IsTainted(*shape)) return false;
+        const char* const blanks = " \t\r\n";
+        const std::string& text = list.text;
+        size_t start = 0;
+        while (true) {
+            const size_t comma = text.find(',', start);
+            const std::string item = text.substr(start, comma == std::string::npos ? std::string::npos : comma - start);
+            std::vector<std::string> words;
+            for (size_t p = item.find_first_not_of(blanks); p != std::string::npos; p = item.find_first_not_of(blanks, p)) {
+                const size_t end = item.find_first_of(blanks, p);
+                words.push_back(item.substr(p, end == std::string::npos ? std::string::npos : end - p));
+                p = end;
+            }
+            if (words.empty() || words.size() > 2 || !IsPathKey(words[0])) return false;
+            if (words.size() == 2) {
+                const std::string dir = AllowlistKey(words[1]);
+                if (dir != AllowlistKey("Возр") && dir != AllowlistKey("Убыв") && dir != "ASC" && dir != "DESC") {
+                    return false;
+                }
+            }
+            const auto it = table.columns->columns.find(AllowlistKey(words[0]));
+            if (it == table.columns->columns.end() || it->second.name_collision || IsTainted(it->second.origin) ||
+                !it->second.refs_known) {   // a value that may be a reference with unknown targets
+                return false;
+            }
+            for (const std::string& t : it->second.refs) {
+                if (!options_.policy || !options_.policy->HasTable(t) ||
+                    options_.policy->PresentationClass(t) != strict::FieldClass::Open) {
+                    return false;
+                }
+            }
+            if (comma == std::string::npos) return true;
+            start = comma + 1;
+        }
     }
 
     VType CollectionMethod(const std::string& m, const VType& recv, const std::vector<VType>& args, const Expr& e) {

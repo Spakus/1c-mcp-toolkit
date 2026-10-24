@@ -420,7 +420,8 @@ private:
         Child(it.expr, 0);
         if (!name.empty()) {
             W(" КАК ");
-            Ident(name, "item alias");
+            if (!IsPlainIdent(name) && !IsAllowedKeywordSegment(name)) Fail("Q_PRINT_IDENT", "item alias");
+            W(name);
         }
     }
     // One select without its ОБЪЕДИНИТЬ parts and statement-level clauses.

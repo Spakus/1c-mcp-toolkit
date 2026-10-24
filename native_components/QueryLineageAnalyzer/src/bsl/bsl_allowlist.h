@@ -156,6 +156,8 @@ inline constexpr MethodRule kMethodRules[] = {
 
     {Ty::ValueTable, "Количество", "Count", Ty::Number, Taint::Open, 0, 0, ArgRule::Any},
     {Ty::ValueTable, "ВыгрузитьКолонку", "UnloadColumn", Ty::Array, Taint::Propagate, 1, 1, ArgRule::LiteralString},
+    // Only a literal list of open columns; any other sort is refused by the checker like an unknown method.
+    {Ty::ValueTable, "Сортировать", "Sort", Ty::Undefined, Taint::Propagate, 1, 1, ArgRule::LiteralString},
     {Ty::ColumnCollection, "Количество", "Count", Ty::Number, Taint::Open, 0, 0, ArgRule::Any},
 
     {Ty::Array, "Добавить", "Add", Ty::Undefined, Taint::Propagate, 1, 1, ArgRule::Any},
