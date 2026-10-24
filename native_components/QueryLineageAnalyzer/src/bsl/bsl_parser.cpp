@@ -7,6 +7,7 @@
 #include <utility>
 #include <vector>
 
+#include "bsl/bsl_reserved.h"
 #include "bsl/bsl_tokenizer.h"
 #include "utf_utils.h"
 
@@ -90,7 +91,7 @@ bool IsBlockTerminator(Bk kw) {
 
 class P {
 public:
-    explicit P(std::vector<Token> t) : t_(std::move(t)) {}
+    P(std::vector<Token> t, bool allow_reserved) : t_(std::move(t)), allow_reserved_(allow_reserved) {}
 
     // Any token the tokenizer could not classify rejects the whole text before any grammar decision.
     void Prescan() const {
@@ -192,6 +193,7 @@ private:
         if (t.kind != Bt::Identifier) Error("C_PARSE", "identifier expected");
         if (t.mixed_script || !IsValidIdent(t.text)) Error("C_PARSE", "invalid identifier");
         if (IsEvalName(t.text)) Error("C_EVAL", "dynamic evaluation is not allowed");
+        if (!allow_reserved_ && IsReservedName(t.text)) Error("C_RESERVED", "reserved name");
         return Next().text;
     }
 
@@ -532,6 +534,7 @@ private:
     }
 
     std::vector<Token> t_;
+    bool allow_reserved_ = false;
     size_t i_ = 0;
     int depth_ = 0;
     int block_depth_ = 0;
@@ -555,7 +558,7 @@ bool Bad(ParseError& err, const char* code, const char* detail) {
     return false;
 }
 
-bool CheckExprNodeImpl(const Expr& e, ParseError& err) {
+bool CheckExprNodeImpl(const Expr& e, ParseError& err, bool allow_reserved) {
     const char* kInvalid = "invalid expression node";
     if (e.lit != Expr::L::None && e.kind != Expr::K::Lit) return Bad(err, "C_INTERNAL", kInvalid);
     if (e.has_parens && e.kind != Expr::K::New) return Bad(err, "C_INTERNAL", kInvalid);
@@ -579,6 +582,7 @@ bool CheckExprNodeImpl(const Expr& e, ParseError& err) {
             }
             return Bad(err, "C_INTERNAL", kInvalid);
         case Expr::K::Var:
+            if (!allow_reserved && IsReservedName(e.text)) return Bad(err, "C_RESERVED", "reserved name");
             return (n == 0 && IsPlainName(e.text)) || Bad(err, "C_INTERNAL", "invalid identifier");
         case Expr::K::Member:
             return (n == 1 && IsValidIdent(e.text)) || Bad(err, "C_INTERNAL", "invalid member");
@@ -586,12 +590,14 @@ bool CheckExprNodeImpl(const Expr& e, ParseError& err) {
             return (n == 2 && e.text.empty()) || Bad(err, "C_INTERNAL", kInvalid);
         case Expr::K::Call:
             if (n > kMaxCallArgs) return Bad(err, "C_LIMIT", "too many arguments");
+            if (!allow_reserved && IsReservedName(e.text)) return Bad(err, "C_RESERVED", "reserved name");
             return IsPlainName(e.text) || Bad(err, "C_INTERNAL", "invalid identifier");
         case Expr::K::MethodCall:
             if (n > kMaxCallArgs + 1) return Bad(err, "C_LIMIT", "too many arguments");
             return (n >= 1 && IsValidIdent(e.text)) || Bad(err, "C_INTERNAL", "invalid method");
         case Expr::K::New:
             if (n > kMaxCallArgs) return Bad(err, "C_LIMIT", "too many arguments");
+            if (!allow_reserved && IsReservedName(e.text)) return Bad(err, "C_RESERVED", "reserved name");
             return (IsPlainName(e.text) && (e.has_parens || n == 0)) || Bad(err, "C_INTERNAL", "invalid new");
         case Expr::K::Ternary:
             return (n == 3 && e.text.empty()) || Bad(err, "C_INTERNAL", kInvalid);
@@ -607,8 +613,8 @@ bool CheckExprNodeImpl(const Expr& e, ParseError& err) {
     return Bad(err, "C_INTERNAL", "unset expression node");
 }
 
-bool CheckExprNode(const Expr& e, ParseError& err) {
-    if (CheckExprNodeImpl(e, err)) return true;
+bool CheckExprNode(const Expr& e, ParseError& err, bool allow_reserved) {
+    if (CheckExprNodeImpl(e, err, allow_reserved)) return true;
     err.pos = e.pos;
     return false;
 }
@@ -624,10 +630,11 @@ bool ValidLvalue(const Expr& e) {
     return cur->kind == Expr::K::Var;
 }
 
-bool CheckStmtNodeImpl(const Stmt& s, bool in_loop, ParseError& err) {
+bool CheckStmtNodeImpl(const Stmt& s, bool in_loop, ParseError& err, bool allow_reserved) {
     const char* kInvalid = "invalid statement node";
     if (s.has_else && s.kind != Stmt::K::If) return Bad(err, "C_INTERNAL", kInvalid);
     const bool wantsVar = s.kind == Stmt::K::ForEach || s.kind == Stmt::K::ForTo;
+    if (wantsVar && !allow_reserved && IsReservedName(s.var)) return Bad(err, "C_RESERVED", "reserved name");
     if (wantsVar ? !IsPlainName(s.var) : !s.var.empty()) return Bad(err, "C_INTERNAL", kInvalid);
     for (const ExprP& x : s.exprs) {
         if (!x) return Bad(err, "C_INTERNAL", "null child");
@@ -655,15 +662,15 @@ bool CheckStmtNodeImpl(const Stmt& s, bool in_loop, ParseError& err) {
     return Bad(err, "C_INTERNAL", "unset statement node");
 }
 
-bool CheckStmtNode(const Stmt& s, bool in_loop, ParseError& err) {
-    if (CheckStmtNodeImpl(s, in_loop, err)) return true;
+bool CheckStmtNode(const Stmt& s, bool in_loop, ParseError& err, bool allow_reserved) {
+    if (CheckStmtNodeImpl(s, in_loop, err, allow_reserved)) return true;
     err.pos = s.pos;
     return false;
 }
 
 }  // namespace
 
-bool ValidateBody(const Body& body, ParseError& err) {
+bool ValidateBody(const Body& body, ParseError& err, bool allow_reserved) {
     std::vector<Work> stack;
     Work root;
     root.b = &body;
@@ -687,7 +694,7 @@ bool ValidateBody(const Body& body, ParseError& err) {
             }
         } else if (w.s) {
             const Stmt& s = *w.s;
-            if (!CheckStmtNode(s, w.in_loop, err)) return false;
+            if (!CheckStmtNode(s, w.in_loop, err, allow_reserved)) return false;
             for (const ExprP& x : s.exprs) {
                 Work e;
                 e.e = x.get();
@@ -708,7 +715,7 @@ bool ValidateBody(const Body& body, ParseError& err) {
                 err.pos = w.e->pos;
                 return false;
             }
-            if (!CheckExprNode(*w.e, err)) return false;
+            if (!CheckExprNode(*w.e, err, allow_reserved)) return false;
             for (const ExprP& a : w.e->args) {
                 Work c;
                 c.e = a.get();
@@ -720,14 +727,14 @@ bool ValidateBody(const Body& body, ParseError& err) {
     return true;
 }
 
-ParseResult ParseBsl(const std::string& utf8) {
+ParseResult ParseBsl(const std::string& utf8, bool allow_reserved) {
     ParseResult r;
     try {
-        P p(Tokenize(utf8));
+        P p(Tokenize(utf8), allow_reserved);
         p.Prescan();
         r.body = p.ParseProgram();
         ParseError err;
-        if (!ValidateBody(r.body, err)) throw Fail{err};
+        if (!ValidateBody(r.body, err, allow_reserved)) throw Fail{err};
         r.ok = true;
     } catch (const Fail& f) {
         r.ok = false;

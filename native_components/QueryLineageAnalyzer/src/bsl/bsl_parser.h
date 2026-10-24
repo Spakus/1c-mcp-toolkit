@@ -8,7 +8,7 @@
 //
 // Reason codes: C_EVAL (Выполнить, Вычислить), C_HANDLER (ДобавитьОбработчик / УдалитьОбработчик),
 // C_RAISE (ВызватьИсключение with an argument), C_DYNAMIC_NEW (Новый("...")), C_LIMIT (size / depth / statement
-// budgets), C_PARSE (everything else: unknown tokens, labels, Перейти, Процедура / Функция / Перем / Возврат,
+// budgets), C_RESERVED (a name of bsl_reserved.h used by client code), C_PARSE (everything else: unknown tokens, labels, Перейти, Процедура / Функция / Перем / Возврат,
 // Асинх / Ждать, mixed Latin/Cyrillic identifiers, malformed syntax), C_INTERNAL.
 //
 // A keyword after '.' is a member name (Запрос.Выполнить()) and never changes statement structure.
@@ -34,13 +34,14 @@ constexpr size_t kMaxNodes = 200000;        // node-visit budget of ValidateBody
 
 struct ParseResult { bool ok = false; Body body; ParseError error; };
 
-ParseResult ParseBsl(const std::string& utf8);
+// allow_reserved is for the canonical printer's re-parse only: it admits the names of bsl_reserved.h.
+ParseResult ParseBsl(const std::string& utf8, bool allow_reserved = false);
 
 // Structural validator: concrete kinds only (Unset is rejected), the arity and payload each kind requires
 // (identifier charset without Latin/Cyrillic mixing, number / date text, flags only on the kinds that use
 // them), no null children, Прервать / Продолжить only inside a loop, depth and node budgets. Iterative, so it
 // is safe on arbitrary caller-built trees. ParseBsl runs it on its own result.
-bool ValidateBody(const Body& body, ParseError& err);
+bool ValidateBody(const Body& body, ParseError& err, bool allow_reserved = false);
 
 // Deterministic S-expression dump (tests, round-trip property). Recursive: call it only on validated trees.
 std::string DumpBsl(const Body& body);
