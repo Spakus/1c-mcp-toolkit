@@ -1,0 +1,6 @@
+// kind: query
+// expect: safe
+// pending: Q_ORDER_PROTECTED: УПОРЯДОЧИТЬ ПО with a column ordinal is not resolved to the selected column.
+ВЫБРАТЬ Номенклатура.Код КАК Код, Номенклатура.Наименование КАК Наименование
+ИЗ Справочник.Номенклатура КАК Номенклатура
+УПОРЯДОЧИТЬ ПО 1

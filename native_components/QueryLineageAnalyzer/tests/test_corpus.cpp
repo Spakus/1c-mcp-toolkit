@@ -168,7 +168,10 @@ void RunCorpusDir(const fs::path& dir) {
 
     std::vector<fs::path> files;
     for (const auto& entry : fs::recursive_directory_iterator(dir)) {
-        if (entry.is_regular_file() && entry.path().extension() == ".case") files.push_back(entry.path());
+        if (!entry.is_regular_file() || entry.path().extension() != ".case") continue;
+        // legit_pending holds legitimate shapes the checker still stops on; it runs only on request.
+        if (fs::relative(entry.path(), dir).begin()->string() == "legit_pending") continue;
+        files.push_back(entry.path());
     }
     std::sort(files.begin(), files.end());
     if (files.empty()) qla_test::Fail("no cases in " + dir.string(), __FILE__, __LINE__);
@@ -208,6 +211,15 @@ void RunCorpusDir(const fs::path& dir) {
 }  // namespace
 
 TEST(Corpus, RepoCorpus) { RunCorpusDir(fs::path(QLA_CORPUS_DIR)); }
+
+// Legitimate cases the checker does not auto-pass yet (each is a usability gap with a reason code in its header).
+// Not part of the default run; --pending or QLA_PENDING_CORPUS=1 runs it and lists every case still stopped.
+TEST(Corpus, PendingLegitIfRequested) {
+    bool requested = qla_test::ArgValue("--pending") == "1";
+    if (const char* e = std::getenv("QLA_PENDING_CORPUS")) requested = requested || std::string(e) == "1";
+    if (!requested) return;
+    RunCorpusDir(fs::path(QLA_CORPUS_DIR) / "legit_pending");
+}
 
 // An alternative corpus (recipe-derived cases kept outside the repository): --corpus <dir> or QLA_LOCAL_CORPUS.
 // A missing directory is a skip; a present one that is empty or malformed is a failure.

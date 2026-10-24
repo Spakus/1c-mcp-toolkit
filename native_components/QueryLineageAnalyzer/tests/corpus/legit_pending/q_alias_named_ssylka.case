@@ -1,0 +1,5 @@
+// kind: query
+// expect: safe
+// pending: Q_PARSE_EXPECTED: the alias Ссылка after КАК is rejected by the strict parser (the word is taken as a keyword).
+ВЫБРАТЬ Номенклатура.Ссылка КАК Ссылка, Номенклатура.Код КАК Код
+ИЗ Справочник.Номенклатура КАК Номенклатура

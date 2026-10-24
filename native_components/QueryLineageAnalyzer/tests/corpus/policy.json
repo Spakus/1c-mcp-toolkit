@@ -94,5 +94,5 @@
       "extra_fields": {"СуммаОборот": {"class": "open"}}
     }
   },
-  "params": {"П": "client", "МСПТокен1": "token_protected"}
+  "params": {"П": "client", "Ссылка": "client", "Контрагент": "client", "Список": "client", "Код": "client", "МСПТокен1": "token_protected"}
 }
