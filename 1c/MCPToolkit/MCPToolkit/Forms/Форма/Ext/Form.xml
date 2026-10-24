@@ -1430,6 +1430,9 @@
 													<Height>8</Height>
 													<ContextMenu name="ПолеТекстДляДеАнонимизацииHTMLКонтекстноеМеню" id="244"/>
 													<ExtendedTooltip name="ПолеТекстДляДеАнонимизацииHTMLРасширеннаяПодсказка" id="123"/>
+													<Events>
+														<Event name="OnClick">ПолеТекстДляДеАнонимизацииHTMLПриНажатии</Event>
+													</Events>
 												</HTMLDocumentField>
 											</ChildItems>
 										</Page>
