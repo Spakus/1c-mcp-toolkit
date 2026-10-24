@@ -1,5 +1,6 @@
 #include "component.h"
 
+#include "bsl/check_code.h"
 #include "schema_enricher.h"
 #include "strict/check_query.h"
 #include "utf_utils.h"
@@ -17,6 +18,10 @@ namespace lineage {
 namespace {
 const wchar_t* const kCheckFailClosed =
     L"{\"api\":1,\"verdict\":\"confirm\",\"reasons\":[{\"code\":\"Q_INTERNAL\"}]}";
+const wchar_t* const kCheckCodeFailClosed =
+    L"{\"api\":1,\"verdict\":\"confirm\",\"reasons\":[{\"code\":\"C_INTERNAL\",\"line\":1,\"col\":1,\"offset\":0}],"
+    L"\"risks\":[{\"code\":\"R_UNKNOWN_EFFECT\",\"line\":1,\"col\":1}],\"canonical\":\"\",\"result_labels\":{},"
+    L"\"missing_tables\":[]}";
 }  // namespace
 
 const wchar_t* QueryLineageAnalyzerComponent::method_names_en_[] = {
@@ -118,9 +123,12 @@ bool QueryLineageAnalyzerComponent::CallAsFunc(const long lMethodNum, tVariant* 
                                                          WStringToUTF8(GetWStringFromVariant(&paParams[1])));
                 return SetWStringToVariant(pvarRetValue, UTF8ToWString(out));
             }
-            case eMethodCheckCode:   // not implemented yet: fail closed
-                return SetWStringToVariant(
-                    pvarRetValue, L"{\"api\":1,\"verdict\":\"confirm\",\"reasons\":[{\"code\":\"C_NOT_IMPLEMENTED\"}]}");
+            case eMethodCheckCode: {
+                if (lSizeArray < 2) return SetWStringToVariant(pvarRetValue, kCheckCodeFailClosed);
+                std::string out = bsl::CheckCodeImpl(WStringToUTF8(GetWStringFromVariant(&paParams[0])),
+                                                     WStringToUTF8(GetWStringFromVariant(&paParams[1])));
+                return SetWStringToVariant(pvarRetValue, UTF8ToWString(out));
+            }
             case eMethodVersion:
                 return SetWStringToVariant(pvarRetValue, L"0.2.0");
             default:
@@ -131,9 +139,8 @@ bool QueryLineageAnalyzerComponent::CallAsFunc(const long lMethodNum, tVariant* 
             if (lMethodNum == eMethodAnalyzeSources && lSizeArray >= 2) {
                 return SetWStringToVariant(pvarRetValue, GetWStringFromVariant(&paParams[1]));
             }
-            if (lMethodNum == eMethodCheckQuery || lMethodNum == eMethodCheckCode) {
-                return SetWStringToVariant(pvarRetValue, kCheckFailClosed);
-            }
+            if (lMethodNum == eMethodCheckQuery) return SetWStringToVariant(pvarRetValue, kCheckFailClosed);
+            if (lMethodNum == eMethodCheckCode) return SetWStringToVariant(pvarRetValue, kCheckCodeFailClosed);
             return SetWStringToVariant(pvarRetValue, L"");
         } catch (...) {
             return false;

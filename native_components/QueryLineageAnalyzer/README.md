@@ -68,4 +68,4 @@ cp build_linux/QueryLineageAnalyzer.so \
 | `AnalyzeSources` | `АнализироватьИсточники` | `queryText`, `schemaJson` | `string` | Обогащает `schema` полем `sources` |
 | `Version` | `Версия` | - | `string` | Версия компоненты |
 | `CheckQuery` | `ПроверитьЗапрос` | `queryText`, `policyJson` | `string` | Строгая проверка запроса: JSON с вердиктом, причинами, каноническим текстом и метками колонок |
-| `CheckCode` | `ПроверитьКод` | `code`, `policyJson` | `string` | Пока всегда `confirm` (`C_NOT_IMPLEMENTED`) |
+| `CheckCode` | `ПроверитьКод` | `code`, `policyJson` | `string` | Строгая проверка кода BSL: JSON с вердиктом, причинами, рисками, каноническим кодом и метками путей `Результат` (`result_labels`); формат описан в `src/bsl/check_code.h` |

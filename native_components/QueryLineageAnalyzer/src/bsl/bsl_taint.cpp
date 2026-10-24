@@ -110,6 +110,7 @@ public:
             for (const strict::ColumnLabel& c : r.columns) {
                 if (c.name.empty()) return nullptr;
                 ColumnInfo info;
+                info.name = c.name;
                 info.origin = c.origin;
                 info.refs = c.refs;
                 const std::string name = AllowlistKey(c.name);
@@ -117,6 +118,9 @@ public:
                 if (existing == set.columns.end()) {
                     set.columns.emplace(name, std::move(info));
                 } else {
+                    if (NormalizeIdentifierKey(existing->second.name) != NormalizeIdentifierKey(info.name)) {
+                        existing->second.name_collision = true;
+                    }
                     MergeInto(existing->second, info);
                 }
             }
@@ -128,6 +132,10 @@ public:
             for (auto& kv : merged->columns) {
                 const auto other = set.columns.find(kv.first);
                 if (other == set.columns.end()) return nullptr;
+                if (NormalizeIdentifierKey(kv.second.name) != NormalizeIdentifierKey(other->second.name) ||
+                    other->second.name_collision) {
+                    kv.second.name_collision = true;
+                }
                 MergeInto(kv.second, other->second);
             }
         }

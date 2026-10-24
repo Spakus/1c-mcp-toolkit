@@ -56,11 +56,17 @@ namespace lineage::bsl {
 
 using strict::Origin;
 
+// A structure key / column name that may appear in a result path: ASCII letters, digits and '_' (not first), and
+// non-ASCII bytes. A key with '.', '[', ']' or a blank would make two paths ambiguous.
+bool IsPathKey(const std::string& key);
+
 // Allowlist key: upper case, ё folded to е. The same normalisation as NormalizeIdentifierKey plus the ё fold that
 // IsReservedName applies.
 std::string AllowlistKey(const std::string& name);
 
 struct ColumnInfo {
+    std::string name;                // the column name as the platform gives it (first spelling); not compared
+    bool name_collision = false;     // another column differs only in ё / е; not compared
     std::vector<std::string> refs;   // target tables when the column holds a reference (non-empty => Ty::Ref)
     Origin origin = Origin::Unknown; // label of the column's values (CheckQuery)
     bool operator==(const ColumnInfo& o) const { return refs == o.refs && origin == o.origin; }
@@ -98,6 +104,26 @@ struct TypeCheckOptions {
 
 constexpr size_t kMaxCodeWork = 500000;   // well under a second; ordinary client code uses a few percent
 
+// What one position of a collection holds, for the Результат description (Task 27): the structure key, the element of
+// an array, the value of a map, the key of a map. Joined over every value ever stored there.
+struct SlotLabels {
+    std::optional<Origin> scalar;        // scalar values stored (joined)
+    bool ref = false;                    // an untainted reference value is stored (the serializer describes it)
+    bool opaque = false;                 // a value of a type the description does not model
+    std::set<const Expr*> nested;        // collections stored
+    bool operator==(const SlotLabels& o) const {
+        return scalar == o.scalar && ref == o.ref && opaque == o.opaque && nested == o.nested;
+    }
+    bool Empty() const { return !scalar && !ref && !opaque && nested.empty(); }
+};
+
+struct FieldSlot {
+    std::string name;                    // the key as written (first spelling)
+    SlotLabels slot;
+    bool collide = false;                // two spellings of the key differ in ё / е (AllowlistKey folds them)
+    bool operator==(const FieldSlot& o) const { return name == o.name && slot == o.slot && collide == o.collide; }
+};
+
 // Flow-insensitive part of the label pass, joined monotonically over the whole program: collections can be
 // aliased (Д = М, Результат = М before М.Добавить), so their contents live per allocation site, not per variable.
 // An empty optional is "nothing stored yet".
@@ -108,9 +134,15 @@ struct ObjectLabels {
     std::set<std::string> refs;          // reference targets among the stored values
     bool ref_unknown = false;            // a stored value may be a reference with unknown targets
     std::set<const Expr*> nested;        // collections stored in it
+    // Task 27: the structure of the collection for the Результат description.
+    Ty kind = Ty::Unknown;               // Array / Structure / Map / ...: set at the allocation
+    SlotLabels elem;                     // array elements, map values, structure values under a non-literal key
+    SlotLabels key_slot;                 // map keys
+    std::map<std::string, FieldSlot> fields;   // structure keys by AllowlistKey
     bool operator==(const ObjectLabels& o) const {
         return content == o.content && shape == o.shape && keys == o.keys && refs == o.refs &&
-               ref_unknown == o.ref_unknown && nested == o.nested;
+               ref_unknown == o.ref_unknown && nested == o.nested && kind == o.kind && elem == o.elem &&
+               key_slot == o.key_slot && fields == o.fields;
     }
 };
 
@@ -141,6 +173,12 @@ struct QueryTextUse {
 };
 
 enum class CodeVerdict { Safe, Confirm };
+
+// One entry of result_labels: a path over the serialized Результат and its label (see check_code.h).
+struct ResultPath {
+    std::string path;
+    std::string label;   // open | client | protected | protected_derived | unknown | mixed | container | ref
+};
 
 // "Tainted" labels: ProtectedDirect, ProtectedDerived, Mixed and Unknown.
 inline bool IsTainted(Origin o) { return o != Origin::Open && o != Origin::Client; }
@@ -186,7 +224,25 @@ struct CodeAnalysis {
     std::map<const Expr*, int> bound_tokens;      // string literals bound to issued tokens (PrintOptions)
     std::map<const Expr*, std::string> query_canonical;   // text expression -> canonical query text (PrintOptions)
     Origin result_label = Origin::Unknown;        // label of Результат at the end, contents included
+    // Task 27: the per-path labels of Результат. result_reasons (C_UNLABELED_RESULT, C_MIXED_RESULT, C_DERIVED_RESULT)
+    // are NOT in `reasons` and do not change `verdict`: the CheckCode layer merges them.
+    std::vector<ResultPath> result_labels;
+    std::vector<CodeReason> result_reasons;
 };
+
+// The final value of Результат as the description pass sees it (a flattened VType of bsl_types.cpp).
+struct ResultValue {
+    Ty ty = Ty::Unknown;
+    Origin label = Origin::Unknown;
+    bool maybe_ref = true;                       // the value may be a reference
+    std::set<const Expr*> objs;                  // collections the value may be
+    std::shared_ptr<const ColumnSet> columns;    // ValueTable
+};
+
+// Builds result_labels / result_reasons from the final value (null: Результат was never assigned, so it keeps the
+// host's initial Неопределено) and the label state. Mirrors БезопасноеЗначениеДляПередачи, depth limit included.
+// Never throws.
+void DescribeResult(const ResultValue* value, const LabelState& state, CodeAnalysis& out);
 
 // One walk of the type and label pass. `state` is read and joined into; bsl_taint.h repeats the walk until it is
 // stable. The reasons describe this walk only.

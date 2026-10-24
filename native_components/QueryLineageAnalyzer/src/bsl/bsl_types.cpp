@@ -190,6 +190,27 @@ bool Fold(const Expr& e, std::string& out) {
     return false;
 }
 
+// The key list of "Новый Структура(<keys>, ...)": comma-separated identifiers. False when a key is not an identifier
+// (then the platform fails at run time, and the description cannot name the fields).
+bool SplitStructureKeys(const std::string& list, std::vector<std::string>& out) {
+    out.clear();
+    const char* const blanks = " \t\r\n";
+    if (list.find_first_not_of(blanks) == std::string::npos) return true;
+    size_t start = 0;
+    while (true) {
+        const size_t comma = list.find(',', start);
+        std::string key = list.substr(start, comma == std::string::npos ? std::string::npos : comma - start);
+        const size_t b = key.find_first_not_of(blanks);
+        const size_t f = key.find_last_not_of(blanks);
+        if (b == std::string::npos) return false;
+        key = key.substr(b, f - b + 1);
+        if (!IsPathKey(key)) return false;
+        out.push_back(std::move(key));
+        if (comma == std::string::npos) return true;
+        start = comma + 1;
+    }
+}
+
 bool IsReservedParam(const std::string& name) {
     static const std::string prefix = AllowlistKey("МСПТокен");
     return AllowlistKey(name).compare(0, prefix.size(), prefix) == 0;
@@ -252,7 +273,8 @@ public:
 
     CodeAnalysis Run(const Body& body) {
         ParseError err;
-        if (!ValidateBody(body, err)) {
+        const bool valid = ValidateBody(body, err);
+        if (!valid) {
             Add(err.code.empty() ? "C_PARSE" : err.code.c_str(), err.pos);
         } else {
             Block(body);
@@ -260,6 +282,12 @@ public:
         const auto it = env_.find(AllowlistKey("Результат"));
         result_.result_label =
             it == env_.end() || it->second.maybe_unassigned ? Origin::Unknown : ValueLabel(it->second);
+        if (valid) {
+            DescribeFinalResult(it);
+        } else {   // nothing was walked: the result is not known
+            result_.result_labels.assign(1, ResultPath{"$", "unknown"});
+            result_.result_reasons.assign(1, CodeReason{"C_UNLABELED_RESULT", Pos{}});
+        }
         result_.verdict =
             result_.reasons.empty() && result_.missing_tables.empty() ? CodeVerdict::Safe : CodeVerdict::Confirm;
         return std::move(result_);
@@ -317,6 +345,61 @@ private:
         for (const StmtP& s : b.stmts) {
             if (exhausted_) return;
             Statement(*s);
+        }
+    }
+
+    // The per-path labels of Результат (Task 27). An unassigned Результат keeps the host's initial Неопределено.
+    void DescribeFinalResult(Env::const_iterator it) {
+        if (it == env_.end()) {
+            DescribeResult(nullptr, state_, result_);
+            return;
+        }
+        const VType& v = it->second;
+        ResultValue value;
+        value.ty = v.ty;
+        value.label = v.label;
+        value.maybe_ref = MayBeRef(v);
+        value.objs = v.objs;
+        value.columns = v.columns;
+        DescribeResult(&value, state_, result_);
+    }
+
+    // What a stored value is, for the Результат description: a scalar label, an untainted reference, a collection,
+    // or something the description does not model.
+    void NoteSlot(SlotLabels& s, const VType& value) const {
+        const Origin label = WithPc(value.label);
+        switch (value.ty) {
+            case Ty::Undefined:
+            case Ty::Null:
+            case Ty::Boolean:
+            case Ty::Number:
+            case Ty::String:
+            case Ty::Date:
+            case Ty::Uuid: JoinInto(s.scalar, label); return;
+            case Ty::Ref:
+                if (IsTainted(label)) {
+                    JoinInto(s.scalar, label);
+                } else {
+                    s.ref = true;
+                }
+                return;
+            case Ty::Array:
+            case Ty::Structure:
+            case Ty::Map:
+                s.nested.insert(value.objs.begin(), value.objs.end());
+                if (value.objs.empty()) s.opaque = true;
+                return;
+            case Ty::Unknown:
+                if (!value.objs.empty()) {
+                    s.nested.insert(value.objs.begin(), value.objs.end());
+                    if (IsTainted(label) || MayBeRef(value)) s.opaque = true;
+                } else if (MayBeRef(value) && !IsTainted(label)) {
+                    s.opaque = true;
+                } else {
+                    JoinInto(s.scalar, label);
+                }
+                return;
+            default: s.opaque = true; return;
         }
     }
 
@@ -430,7 +513,7 @@ private:
     }
 
     // Stores a value into every collection `coll` may be (an element, a structure value, a map value).
-    void Store(const VType& coll, const VType& value, const Pos& pos) {
+    void Store(const VType& coll, const VType& value, const Pos& pos, const std::string* field = nullptr) {
         if (coll.objs.empty()) {
             Add("C_INTERNAL", pos);   // a collection without an allocation site: its contents could not be tracked
             return;
@@ -440,6 +523,17 @@ private:
         if (label) label = WithPc(*label);
         for (const Expr* o : coll.objs) {
             ObjectLabels& ol = state_.objects[o];
+            SlotLabels* slot = &ol.elem;
+            if (ol.kind == Ty::Structure && field) {
+                FieldSlot& f = ol.fields[AllowlistKey(*field)];
+                if (f.name.empty()) {
+                    f.name = *field;
+                } else if (NormalizeIdentifierKey(f.name) != NormalizeIdentifierKey(*field)) {
+                    f.collide = true;   // spellings that differ in ё / е: the serialized one is not known
+                }
+                slot = &f.slot;
+            }
+            NoteSlot(*slot, value);
             JoinInto(ol.content, label);
             if (IsTainted(pc_)) JoinInto(ol.shape, pc_);
             if (MayBeRef(value)) {
@@ -455,7 +549,10 @@ private:
         std::optional<Origin> input = label;
         JoinInto(input, KeysOf(coll));
         KeyOp(pos, *input);
-        for (const Expr* o : coll.objs) JoinInto(state_.objects[o].keys, label);
+        for (const Expr* o : coll.objs) {
+            JoinInto(state_.objects[o].keys, label);
+            NoteSlot(state_.objects[o].key_slot, key);
+        }
     }
 
     // The label of a presentation read ("x" + Ссылка, Строка(Ссылка)): the presentation class of every target,
@@ -756,10 +853,14 @@ private:
             return v;
         }
         v.objs.insert(&e);
-        state_.objects[&e];   // the collection exists even when nothing is stored in it
+        state_.objects[&e].kind = rule->result;   // the collection exists even when nothing is stored in it
+        std::vector<std::string> keys;
+        const bool keys_ok = rule->result == Ty::Structure && !e.args.empty() && IsStringLit(*e.args[0]) &&
+                             SplitStructureKeys(e.args[0]->text, keys) && keys.size() + 1 == e.args.size();
         for (size_t i = 0; i < args.size(); ++i) {
             if (rule->result == Ty::Structure && i > 0) {
-                Store(v, args[i], e.args[i]->pos);   // values; the first argument is the key list
+                // values; the first argument is the key list
+                Store(v, args[i], e.args[i]->pos, keys_ok ? &keys[i - 1] : nullptr);
                 continue;
             }
             if (rule->result == Ty::Structure) NameLiteral(*e.args[i]);
@@ -898,17 +999,20 @@ private:
         VType v = Typed(Ty::Array, Origin::Client);
         v.objs.insert(&call);
         ObjectLabels& ol = state_.objects[&call];
+        ol.kind = Ty::Array;
         const ColumnInfo* column = nullptr;
         if (table.columns && IsStringLit(name_expr)) {
             const auto it = table.columns->columns.find(AllowlistKey(name_expr.text));
             if (it != table.columns->columns.end()) column = &it->second;
         }
         if (column) {
+            NoteSlot(ol.elem, ColumnType(*column, table));
             JoinInto(ol.content, column->origin);
             ol.refs.insert(column->refs.begin(), column->refs.end());
             ol.ref_unknown = ol.ref_unknown || column->refs.empty();
         } else {
             Add("C_UNKNOWN_MEMBER", name_expr.pos);   // a column the query check does not report
+            JoinInto(ol.elem.scalar, Origin::Unknown);
             JoinInto(ol.content, Origin::Unknown);
             ol.ref_unknown = true;
         }
@@ -928,7 +1032,8 @@ private:
             if (IsTainted(pc_)) {
                 for (const Expr* o : recv.objs) JoinInto(state_.objects[o].shape, pc_);
             }
-            Store(recv, args.size() > 1 ? args[1] : Typed(Ty::Undefined, Origin::Client), e.pos);
+            Store(recv, args.size() > 1 ? args[1] : Typed(Ty::Undefined, Origin::Client), e.pos,
+                  IsStringLit(*e.args[1]) ? &e.args[1]->text : nullptr);
             return Typed(Ty::Undefined, Origin::Client);
         }
         if (m == AllowlistKey("Количество")) {
@@ -1095,7 +1200,7 @@ private:
                         for (const Expr* o : obj.objs) JoinInto(state_.objects[o].shape, pc_);
                     }
                     if (obj.ty == Ty::Map) StoreKey(obj, index, target.args[1]->pos);
-                    Store(obj, value, target.pos);
+                    Store(obj, value, target.pos, IsStringLit(*target.args[1]) ? &target.args[1]->text : nullptr);
                 }
             } else if (obj.ty == Ty::Unknown) {
                 Add("C_UNKNOWN_RECEIVER", target.pos);
