@@ -143,7 +143,9 @@ private:
         if (src.name.find('.') != std::string::npos) {
             b.kind = Binding::Kind::Table;
             b.table = src.name;
-            b.known = policy_.HasTable(src.name);
+            // A virtual table written without parentheses (РегистрНакопления.Р.Остатки) is the same table with every
+            // parameter omitted: the binding equals the one BuildVirtualTable makes for an empty parameter list.
+            b.known = policy_.HasTable(src.name) || !policy_.ResolveVirtualBase(src.name).empty();
             if (!b.known) {
                 sink_.MissingTable(src.name);
                 sink_.Issue(kResolveUnknownSource, src.pos);
