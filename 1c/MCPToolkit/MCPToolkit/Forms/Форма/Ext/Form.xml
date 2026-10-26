@@ -1149,6 +1149,7 @@
 											<ExtendedTooltip name="ДекорацияСостояниеЗащитыРасширеннаяПодсказка" id="276"/>
 										</LabelDecoration>
 										<Button name="КнопкаВосстановитьДоверие" id="277">
+											<Type>UsualButton</Type>
 											<Visible>false</Visible>
 											<CommandName>Form.Command.ВосстановитьДоверие</CommandName>
 											<ExtendedTooltip name="КнопкаВосстановитьДовериеРасширеннаяПодсказка" id="278"/>
@@ -1477,7 +1478,6 @@
 							<TitleLocation>Top</TitleLocation>
 							<ReadOnly>true</ReadOnly>
 							<Height>12</Height>
-							<HorizontalStretch>true</HorizontalStretch>
 							<DataPath>ЖурналШлюза</DataPath>
 							<Title>
 								<v8:item>
