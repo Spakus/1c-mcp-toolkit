@@ -17,7 +17,7 @@
 
 namespace lineage::strict {
 
-// Resolution problem. Task 17 maps these onto public reason codes; they are never shown to the client as is.
+// Resolution problem. The rule engine maps these onto public reason codes; they are never shown to the client as is.
 struct ResolveIssue {
     std::string code;   // RESOLVE_*
     Pos pos;

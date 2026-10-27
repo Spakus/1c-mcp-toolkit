@@ -11,7 +11,7 @@
 // identifier spelling, string values and number/date digits.
 //
 // Member names (after a dot) may be spelled like a keyword ("Запрос.Выполнить()"); they are stored as ordinary
-// names with their source spelling. Whether a member exists on the receiver is the allowlist's job (Task 24).
+// names with their source spelling. Whether a member exists on the receiver is the allowlist's job.
 
 namespace lineage::bsl {
 

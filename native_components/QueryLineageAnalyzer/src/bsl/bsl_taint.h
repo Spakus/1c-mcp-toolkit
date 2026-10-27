@@ -6,7 +6,7 @@
 #include "bsl/bsl_types.h"
 #include "strict/field_policy.h"
 
-// Taint pass of the strict BSL checker (plan Task 25): drives the type and label walk of bsl_types.h to a fixpoint
+// Taint pass of the strict BSL checker: drives the type and label walk of bsl_types.h to a fixpoint
 // and checks every query text of the client code with CheckQuery under the same policy.
 //
 //   - The flow-insensitive state (collection contents per allocation site, query parameters per Запрос site) and
@@ -28,7 +28,7 @@
 //
 // Hand-offs:
 //   - The keys of bound_tokens / query_canonical / query_texts point into `body`: it must outlive the result.
-//   - Task 27: a protected_derived / mixed / unknown value in Результат must not auto-pass (equal derived values
+//   - Result description: a protected_derived / mixed / unknown value in Результат must not auto-pass (equal derived values
 //     would show equal tokens); result_label is the label of the whole Результат, the per-path labels still have
 //     to be built from the same walk.
 //   - A token literal written into a query text would need an inserted З.УстановитьПараметр("МСПТокен<n>",
@@ -55,11 +55,11 @@ TokenUse ClassifyTokenLiteral(const std::string& value, const TokenTable* tokens
 // repeated index, or two keys equal up to case is false (the caller refuses the check).
 bool ParseTokenTable(const std::string& policy_json, TokenTable& out);
 
-// Risk classes (Task 26): R_PROTECTION, R_DEFERRED, R_WRITE, R_CREDENTIALS (bsl_allowlist.h, kRiskRules). AnalyzeCode
+// Risk classes: R_PROTECTION, R_DEFERRED, R_WRITE, R_CREDENTIALS (bsl_allowlist.h, kRiskRules). AnalyzeCode
 // fills CodeAnalysis::risks from the tree (every name: variables, calls, "Новый" types, loop variables, members and
 // methods after a dot) and a risk forces Confirm. ScanRisksInSource is the same scan over the tokens of the source
 // text, for code the parser refused (no tree): the gate still shows the markers. If the tokenizer refuses part of the
-// text (an Unknown token, oversize) the whole normalised text is searched with word boundaries. Task 27 merges the
+// text (an Unknown token, oversize) the whole normalised text is searched with word boundaries. The CheckCode entry point merges the
 // two for the CheckCode answer (MergeRisks); the host appends R_RELAUNCH / R_CLIENT_CONTEXT itself.
 std::vector<CodeReason> ScanRisksInSource(const std::string& utf8);
 // Risks of code the parser refused: ScanRisksInSource plus R_UNKNOWN_EFFECT (no tree, nothing proven); for C_EVAL and

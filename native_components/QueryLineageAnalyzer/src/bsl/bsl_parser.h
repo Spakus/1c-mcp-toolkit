@@ -3,7 +3,7 @@
 
 #include "bsl/bsl_ast.h"
 
-// Allowlist parser for the BSL subset accepted by the strict checker (plan Task 22). It is a closed grammar: a
+// Allowlist parser for the BSL subset accepted by the strict checker. It is a closed grammar: a
 // construct that is not listed is a ParseError with a reason code, never a pass-through node.
 //
 // Reason codes: C_EVAL (Выполнить, Вычислить), C_HANDLER (ДобавитьОбработчик / УдалитьОбработчик),
@@ -13,9 +13,9 @@
 //
 // A keyword after '.' is a member name (Запрос.Выполнить()) and never changes statement structure.
 
-// Hand-offs for the printer (Task 23) and the allowlist (Task 24):
+// Hand-offs for the printer and the allowlist:
 // - the printer must escape control, bidi and zero-width characters in string literals;
-// - default-deny in Task 24: Объект.Вычислить / Объект.Выполнить, ЭтотОбъект.*, string-named callbacks
+// - default-deny in the allowlist: Объект.Вычислить / Объект.Выполнить, ЭтотОбъект.*, string-named callbacks
 //   (ОписаниеОповещения and the like): the parser accepts them only as names;
 // - allowlist keys must treat ё and е as equal;
 // - identifiers mixing Latin and Cyrillic (HTTPЗапрос, COMОбъект) are rejected here; acceptable, protection class.

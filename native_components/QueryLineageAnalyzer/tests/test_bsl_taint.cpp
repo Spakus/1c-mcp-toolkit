@@ -214,7 +214,7 @@ TEST(BslTaint, ScalarArithmeticTypes) {
     CHECK(Denied("Результат = ?(Истина, Новый Массив, 2).Количество();", "C_UNKNOWN_RECEIVER"));
 }
 
-// ---- Task 25: taint propagation, implicit flow, query integration, bound tokens ----
+// ---- taint propagation, implicit flow, query integration, bound tokens ----
 
 TEST(BslTaint, ImplicitFlowOnProtectedCondition) {
     auto r = CheckCodeForTest(kPolicyAB,
@@ -579,7 +579,7 @@ TEST(BslTaint, AnalysisKeepsItsParsedBody) {
     CHECK(lineage::bsl::PrintBslCanonicalChecked(r.parsed->body, options).ok);
 }
 
-// ---- Task 26: risk classes ------------------------------------------------------------------------------------
+// ---- risk classes ------------------------------------------------------------------------------------
 
 namespace {
 

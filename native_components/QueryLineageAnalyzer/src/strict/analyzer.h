@@ -9,10 +9,10 @@
 #include "strict/strict_ast.h"
 
 // Strict analysis of a parsed query batch: name resolution (scopes, aliases, temporary tables, subqueries) and
-// the origin label of every output column of the batch's last statement. Task 16/17 add expression labels and
+// the origin label of every output column of the batch's last statement. Later passes add expression labels and
 // the rule engine on top of the same walk.
 
-// Contract for the rule engine (Task 17): ANY column or expression labelled Origin::Unknown must lead to Confirm,
+// Contract for the rule engine: ANY column or expression labelled Origin::Unknown must lead to Confirm,
 // whether or not a resolution issue was recorded. Resolution assumes the policy lists every field of every table;
 // a name that an outer query resolves while an inner policy table does not list it is reported as ambiguous.
 
@@ -28,14 +28,14 @@
 //      Origin classes of protected fields are not modelled, so "protected = protected" means any two protected
 //      values; the host's token space must make a foreign-origin token unresolvable.
 //
-// Notes for Task 18 (labels/rules):
+// Notes for labels and rules:
 //  (d) virtual-table parameters are NOT labelled by the analyzer; rules.cpp CheckVtParam is syntactic only.
 //      They must be labelled in a scope over the register's base table and checked with the Condition rules.
 //  (e) LabelTable needs a per-select "row set filtered / joined / grouped by protected" flag, consumed by (b).
-// Deliberate decisions (Task 18):
+// Deliberate decisions:
 //  (f) protected = protected equality that returns rows (self-joins, cross-field А.Имя = А.Код) stays Safe: the
-//      main token map is keyed by value, so equal values already show equal tokens. Revisit if Task 50
-//      introduces per-field token spaces.
+//      main token map is keyed by value, so equal values already show equal tokens. Revisit if per-field
+//      token spaces are introduced.
 //  (g) filters equivalent to a token equality (НЕ x = tok, x В (tok), OR with open predicates, LEFT JOIN on a
 //      token) stay Safe: the client holds the token. <> is Confirm (conservative, inconsistent but harmless).
 //  (h) grouping by protected data, or РАЗЛИЧНЫЕ over a protected column, is exempt only in the top-level result
@@ -46,7 +46,7 @@
 // Notes for Tasks 46/50: protected equality is allowed between ANY two protected values, e.g. a token of field X
 //  against field Y, or А.Имя = А.Код. Closing it needs a field-origin id on protected labels and token records.
 //
-// Verdict (Task 17): Safe only when there are no reasons, no missing tables and no resolution issues. ANY Unknown
+// Verdict: Safe only when there are no reasons, no missing tables and no resolution issues. ANY Unknown
 // label anywhere yields a reason, and every resolution issue is mirrored as a Q_RESOLVE_* reason. Reasons carry
 // a fixed code and a position in the client's own text, never values.
 

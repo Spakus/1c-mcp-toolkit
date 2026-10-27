@@ -7,11 +7,11 @@
 #include "strict/scope.h"
 #include "strict/strict_ast.h"
 
-// Rule engine of the strict checker (Task 17): which operations over protected values need confirmation.
+// Rule engine of the strict checker: which operations over protected values need confirmation.
 // It runs after name resolution and labelling, over the labels the analyzer recorded for every expression node.
 // Reason codes are fixed and public, carry no values, and point into the client's own text.
 //
-// Implicit channels (Task 18): a select whose row set is filtered, joined or grouped by protected data
+// Implicit channels: a select whose row set is filtered, joined or grouped by protected data
 // ("rows_protected") must not feed an aggregate (Q_AGGREGATE_ROWSET: a COUNT / SUM over open fields would expose
 // the cardinality of the protected condition), and a subquery with such a row set is tainted as a whole when it
 // is used as a value. Virtual-table parameters are labelled by the analyzer against the base table of the

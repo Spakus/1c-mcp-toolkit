@@ -10,7 +10,7 @@
 #include "bsl/bsl_types.h"
 #include "utf_utils.h"
 
-// The Результат description of the strict BSL checker (plan Task 27). It follows БезопасноеЗначениеДляПередачи: the
+// The Результат description of the strict BSL checker. It follows БезопасноеЗначениеДляПередачи: the
 // path syntax and the label set are documented in bsl/check_code.h.
 
 namespace lineage::bsl {

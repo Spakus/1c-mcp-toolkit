@@ -363,7 +363,7 @@ private:
         }
     }
 
-    // The per-path labels of Результат (Task 27). An unassigned Результат keeps the host's initial Неопределено.
+    // The per-path labels of Результат. An unassigned Результат keeps the host's initial Неопределено.
     void DescribeFinalResult(Env::const_iterator it) {
         if (it == env_.end()) {
             DescribeResult(nullptr, state_, result_);

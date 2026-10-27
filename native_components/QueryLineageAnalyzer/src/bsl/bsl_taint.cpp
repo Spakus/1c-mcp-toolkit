@@ -203,7 +203,7 @@ std::set<const Expr*> TextExprs(const CodeAnalysis& a) {
     return out;
 }
 
-// ---- Risk classes (Task 26) ---------------------------------------------------------------------------------------
+// ---- Risk classes ---------------------------------------------------------------------------------------
 
 constexpr unsigned kRiskProtection = 1, kRiskDeferred = 2, kRiskWrite = 4, kRiskCredentials = 8, kRiskUnknown = 16;
 constexpr size_t kMaxRisksPerClass = 50;   // the gate shows markers, not every occurrence

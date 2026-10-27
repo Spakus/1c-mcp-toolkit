@@ -351,7 +351,7 @@ private:
         switch (policy_.OriginOfParam(e.text)) {
             // A parameter may be a reference whose targets are not known.
             case ParamOrigin::Client: return Plain(Origin::Client, false);
-            case ParamOrigin::TokenProtected: return Plain(Origin::ProtectedDirect, false);   // equality operand (Task 17)
+            case ParamOrigin::TokenProtected: return Plain(Origin::ProtectedDirect, false);   // equality operand
             case ParamOrigin::TokenUnknown: break;
             case ParamOrigin::Missing: sink_.Issue(kResolveUnknownParam, e.pos); break;
         }

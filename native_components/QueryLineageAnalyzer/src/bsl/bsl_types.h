@@ -12,11 +12,11 @@
 #include "strict/field_policy.h"
 #include "strict/origin.h"
 
-// Symbol and type tracking of the strict BSL checker (plan Task 24). AnalyzeCodeWalk walks a validated AST and
+// Symbol and type tracking of the strict BSL checker. AnalyzeCodeWalk walks a validated AST and
 // proves, for every identifier, global function, "Новый" type, member, method and index, that it is on the
 // allowlist (bsl_allowlist.h) and that the receiver's type is KNOWN. Anything else is a reason code (the list is
 // in the comment of CodeAnalysis) and the verdict is Confirm. The same walk carries the origin labels of the taint
-// pass (Task 25): bsl_taint.h drives it to a fixpoint and hands the query texts to CheckQuery. Risk classes and the
+// pass: bsl_taint.h drives it to a fixpoint and hands the query texts to CheckQuery. Risk classes and the
 // Результат labels are Tasks 26-27.
 //
 // Soundness rules (a type that cannot be proven is Unknown, and nothing is allowed on Unknown):
@@ -46,7 +46,7 @@
 //   - a text the walk cannot follow (C_DYNAMIC_QUERY, C_QUERY_ESCAPES: the copy may be changed by code the walk does
 //     not see, C_BAD_ARGS of Новый Запрос): no column is known (LabelState::untracked_queries).
 //
-// Label rules (Task 25; the lattice is lineage::strict::Origin, the same as the query checker's):
+// Label rules (the lattice is lineage::strict::Origin, the same as the query checker's):
 //   - literals are Client; a whole string literal equal to an issued token is that token's origin (ProtectedDirect
 //     or Unknown) and is printed as МСПЗначенияТокенов[n]; a query column has its CheckQuery label; a dereferenced
 //     attribute (Ссылка.Имя) has its policy class; anything the walk cannot label is Unknown;
@@ -117,7 +117,7 @@ struct TypeCheckOptions {
 
 constexpr size_t kMaxCodeWork = 500000;   // well under a second; ordinary client code uses a few percent
 
-// What one position of a collection holds, for the Результат description (Task 27): the structure key, the element of
+// What one position of a collection holds, for the Результат description: the structure key, the element of
 // an array, the value of a map, the key of a map. Joined over every value ever stored there.
 struct SlotLabels {
     std::optional<Origin> scalar;        // scalar values stored (joined)
@@ -147,7 +147,7 @@ struct ObjectLabels {
     std::set<std::string> refs;          // reference targets among the stored values
     bool ref_unknown = false;            // a stored value may be a reference with unknown targets
     std::set<const Expr*> nested;        // collections stored in it
-    // Task 27: the structure of the collection for the Результат description.
+    // The structure of the collection for the Результат description.
     Ty kind = Ty::Unknown;               // Array / Structure / Map / ...: set at the allocation
     SlotLabels elem;                     // array elements, map values, structure values under a non-literal key
     SlotLabels key_slot;                 // map keys
@@ -183,7 +183,7 @@ struct CodeReason {
     Pos pos;
 };
 
-// Hand-off (Task 25): one Запрос site may carry several texts (Новый Запрос(t1), then .Текст = t2, or assignments on
+// Hand-off to the taint pass: one Запрос site may carry several texts (Новый Запрос(t1), then .Текст = t2, or assignments on
 // different paths). CheckQuery every text recorded for the site and use the worst case per column across them.
 // A constant query text given to a Запрос: "Новый Запрос(<text>)" or "<Запрос>.Текст = <text>".
 struct QueryTextUse {
@@ -225,7 +225,7 @@ inline bool IsTainted(Origin o) { return o != Origin::Open && o != Origin::Clien
 //   C_LIMIT / C_PARSE a tree that fails ValidateBody (hand-built trees); C_LIMIT also when the walk or the fixpoint
 //                     runs out of budget
 //   C_RESERVED        a query parameter name in the МСПТокен namespace (set by the code or used in a query text)
-// Taint (Task 25):
+// Taint:
 //   C_FUNC_OVER_PROTECTED  an operation whose input is tainted: an operator (arithmetic, concatenation, comparison,
 //                     И / ИЛИ / НЕ), an allowlisted function or method, a key or an index, a dereference of a
 //                     tainted reference; also a reference read as a string unless every target's presentation is open
@@ -241,13 +241,13 @@ inline bool IsTainted(Origin o) { return o != Origin::Open && o != Origin::Clien
 struct CodeAnalysis {
     CodeVerdict verdict = CodeVerdict::Confirm;   // fail closed: Safe only on a clean pass
     std::vector<CodeReason> reasons;
-    std::vector<CodeReason> risks;                // filled by Task 26
+    std::vector<CodeReason> risks;                // filled by the risk scan
     std::vector<QueryTextUse> query_texts;        // one entry per text expression
     std::set<std::string> missing_tables;         // tables the policy lacks (the host may retry with them)
     std::map<const Expr*, int> bound_tokens;      // string literals bound to issued tokens (PrintOptions)
     std::map<const Expr*, std::string> query_canonical;   // text expression -> canonical query text (PrintOptions)
     Origin result_label = Origin::Unknown;        // label of Результат at the end, contents included
-    // Task 27: the per-path labels of Результат. result_reasons (C_UNLABELED_RESULT, C_MIXED_RESULT, C_DERIVED_RESULT)
+    // The per-path labels of Результат. result_reasons (C_UNLABELED_RESULT, C_MIXED_RESULT, C_DERIVED_RESULT)
     // are NOT in `reasons` and do not change `verdict`: the CheckCode layer merges them.
     std::vector<ResultPath> result_labels;
     std::vector<CodeReason> result_reasons;

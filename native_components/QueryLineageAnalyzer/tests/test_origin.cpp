@@ -746,7 +746,7 @@ TEST(Origin, OrdinalOrderingAndNonLastResultSets) {
         "ВЫБРАТЬ Б.Сумма КАК Х ПОМЕСТИТЬ ВТ ИЗ Справочник.Б КАК Б; ВЫБРАТЬ ВТ.Х КАК Y ИЗ ВТ КАК ВТ").verdict == Verdict::Safe);
 }
 
-// ---- Task 18: clause-specific rules and implicit-condition channels ----
+// ---- clause-specific rules and implicit-condition channels ----
 
 TEST(Origin, ConditionChannels) {
     // join ON comparing a protected field with a literal
@@ -943,7 +943,7 @@ TEST(Origin, VirtualTableEarlierSlotsMayNotBeProtected) {
         "ВЫБРАТЬ О.СуммаОстаток КАК С ИЗ " + vt + "(, Контрагент.Имя = &МСПТокен1, ) КАК О"), "Q_VT_PARAM"));
 }
 
-// ---- Task 19: propagation through temp tables, UNION and subqueries ----
+// ---- propagation through temp tables, UNION and subqueries ----
 
 TEST(Origin, UnionOfProtectedAndClientIsMixed) {
     auto r = AnalyzeForTest(kPolicyAB,

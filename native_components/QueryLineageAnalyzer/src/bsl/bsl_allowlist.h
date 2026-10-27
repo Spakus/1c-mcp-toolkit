@@ -2,7 +2,7 @@
 #include <cstddef>
 #include <cstdint>
 
-// Allowlist data of the strict BSL checker (plan Task 24). Data only: no logic, no lookups; bsl_types.cpp builds
+// Allowlist data of the strict BSL checker. Data only: no logic, no lookups; bsl_types.cpp builds
 // its tables from the arrays below. Default deny: a global function, a "Новый" type, a member or a method that is
 // not listed here is a reason code and a confirmation, never a pass. Every name is given in Russian and in the
 // English platform synonym; matching is case-insensitive and folds ё to е (AllowlistKey in bsl_types.h).
@@ -16,10 +16,10 @@
 //   Open:      the arguments must be open or client data; over protected data the call needs confirmation
 //              (C_FUNC_OVER_PROTECTED); the result is open;
 //   Confirm:   always needs confirmation.
-// Hand-off (Task 25): a Ref argument to Строка / Формат / Лев / ... reads its presentation from the database; it must be
+// Hand-off to the taint pass: a Ref argument to Строка / Формат / Лев / ... reads its presentation from the database; it must be
 // labelled as the target table's presentation class (protected unless the policy says open). The Open rows below apply
 // only to non-reference arguments.
-// Task 25 may refine individual rows (for example the one-bit results of ЗначениеЗаполнено and Количество).
+// The taint pass may refine individual rows (for example the one-bit results of ЗначениеЗаполнено and Количество).
 
 namespace lineage::bsl {
 
@@ -182,13 +182,13 @@ inline constexpr PropertyRule kPropertyRules[] = {
     {Ty::ValueTable, "Колонки", "Columns", Ty::ColumnCollection},
 };
 
-// ---- Risk classes (plan Task 26) ----------------------------------------------------------------------------
+// ---- Risk classes ----------------------------------------------------------------------------
 // A risk is independent of the reasons: the NAME alone raises it, wherever it stands (variable, global function,
 // "Новый" type, loop variable and every member or method name after a dot), whatever the receiver's type is. A risk
 // always forces Confirm. The table is deliberately wider than the allowlist (default deny): an over-report shows an
 // extra marker in the gate, a miss would hide a side effect. Names are matched on AllowlistKey (case-insensitive,
 // ё = е). Modes: Exact (the whole name), Prefix, Contains (substring). Russian and English spellings are separate
-// rows. Codes: Protection R_PROTECTION, Deferred R_DEFERRED, Write R_WRITE (decision #5), Credentials R_CREDENTIALS.
+// rows. Codes: Protection R_PROTECTION, Deferred R_DEFERRED, Write R_WRITE, Credentials R_CREDENTIALS.
 // Relaunch (R_RELAUNCH) and the client context (R_CLIENT_CONTEXT) are appended by the host, not found in code.
 enum class RiskClass : uint8_t { Protection, Deferred, Write, Credentials };
 enum class RiskMatch : uint8_t { Exact, Prefix, Contains };

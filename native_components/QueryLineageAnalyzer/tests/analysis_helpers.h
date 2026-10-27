@@ -10,7 +10,7 @@
 #include "bsl/bsl_types.h"
 #include "strict/strict_parser.h"
 
-// Helpers of the strict-checker suites. Task 24 adds CheckCodeForTest, HasCodeReason and HasRisk.
+// Helpers of the strict-checker suites. It also provides CheckCodeForTest, HasCodeReason and HasRisk.
 
 namespace lineage::strict {
 

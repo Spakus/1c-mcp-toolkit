@@ -1,7 +1,7 @@
 #pragma once
 #include <string>
 
-// Strict code check, the entry point behind the CheckCode component method (plan Task 27). Returns a JSON object:
+// Strict code check, the entry point behind the CheckCode component method. Returns a JSON object:
 //   {"api":1,"verdict":"safe|confirm|incomplete",
 //    "reasons":[{"code","line","col","offset"}], "risks":[{"code","line","col"}],
 //    "canonical":"...", "result_labels":{"<path>":"<label>"}, "missing_tables":[...]}
@@ -23,7 +23,7 @@
 // token of the policy's "tokens" table whose 0-based "index" is n. A confirm verdict keeps the canonical text, so
 // the user confirms exactly what runs.
 //
-// "result_labels" (binding contract with the masker, plan Task 51): path -> label over the SERIALIZED Результат, i.e.
+// "result_labels" (binding contract with the masker): path -> label over the SERIALIZED Результат, i.e.
 // the value БезопасноеЗначениеДляПередачи (ObjectModule) produces, not the BSL types:
 //   $                the root (the host wraps it under "data" and prefixes the paths accordingly)
 //   .Key             a structure key (a literal of the code; an identifier: no dot, brackets or blanks)
