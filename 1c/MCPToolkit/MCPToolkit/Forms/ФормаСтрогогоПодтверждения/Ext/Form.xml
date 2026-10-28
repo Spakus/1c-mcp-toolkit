@@ -38,7 +38,9 @@
 			</Title>
 			<TitleLocation>Top</TitleLocation>
 			<Width>70</Width>
+			<AutoMaxWidth>false</AutoMaxWidth>
 			<Height>3</Height>
+			<HorizontalStretch>true</HorizontalStretch>
 			<MultiLine>true</MultiLine>
 			<ContextMenu name="ПолеПричиныКонтекстноеМеню" id="108"/>
 			<ExtendedTooltip name="ПолеПричиныРасширеннаяПодсказка" id="109"/>
@@ -54,7 +56,9 @@
 			</Title>
 			<TitleLocation>Top</TitleLocation>
 			<Width>70</Width>
+			<AutoMaxWidth>false</AutoMaxWidth>
 			<Height>3</Height>
+			<HorizontalStretch>true</HorizontalStretch>
 			<MultiLine>true</MultiLine>
 			<ContextMenu name="ПолеРискиКонтекстноеМеню" id="111"/>
 			<ExtendedTooltip name="ПолеРискиРасширеннаяПодсказка" id="112"/>
@@ -70,7 +74,9 @@
 			</Title>
 			<TitleLocation>Top</TitleLocation>
 			<Width>70</Width>
+			<AutoMaxWidth>false</AutoMaxWidth>
 			<Height>3</Height>
+			<HorizontalStretch>true</HorizontalStretch>
 			<MultiLine>true</MultiLine>
 			<ContextMenu name="ПолеОбоснованиеКонтекстноеМеню" id="114"/>
 			<ExtendedTooltip name="ПолеОбоснованиеРасширеннаяПодсказка" id="115"/>
@@ -86,7 +92,9 @@
 			</Title>
 			<TitleLocation>Top</TitleLocation>
 			<Width>70</Width>
+			<AutoMaxWidth>false</AutoMaxWidth>
 			<Height>12</Height>
+			<HorizontalStretch>true</HorizontalStretch>
 			<MultiLine>true</MultiLine>
 			<Font faceName="Courier New" height="10" bold="false" italic="false" underline="false" strikeout="false" kind="Absolute" scale="100"/>
 			<ContextMenu name="ПолеТекстКПодтверждениюКонтекстноеМеню" id="117"/>
