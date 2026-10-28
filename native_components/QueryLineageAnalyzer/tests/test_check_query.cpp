@@ -500,3 +500,88 @@ TEST(CheckQuery, MixedScriptParamNameIsAccepted) {
     CHECK(Codes(named) == std::vector<std::string>{"Q_PARSE_MIXED_SCRIPT"});
 }
 
+
+namespace {
+
+// kPolicyAB plus the constants table (an open number, a protected string, a reference) and one constant object.
+std::string ConstantsPolicy() {
+    nlohmann::json p = nlohmann::json::parse(kPolicyABJson);
+    p["tables"]["Константы"] = nlohmann::json::parse(R"({"presentation": "protected", "fields": {
+        "Порог": {"class": "open"}, "ИмяОрганизации": {"class": "protected"},
+        "Основной": {"class": "open", "refs": ["Справочник.А"]}}})");
+    p["tables"]["Константа.Порог"] = nlohmann::json::parse(R"({"fields": {"Значение": {"class": "open"}}})");
+    return p.dump();
+}
+
+std::string FirstOrigin(const nlohmann::json& j) {
+    return j["columns"].empty() ? std::string("no columns") : j["columns"][0]["origin"].get<std::string>();
+}
+
+}  // namespace
+
+// ИЗ Константы is the constants table, not an undefined temp table: its columns are the policy fields of the
+// "Константы" table, under any alias and in either spelling (Constants maps to the same key).
+TEST(CheckQuery, ConstantsTableResolvesThroughThePolicy) {
+    const std::string policy = ConstantsPolicy();
+    for (const char* query : {
+             "ВЫБРАТЬ Константы.Порог КАК П ИЗ Константы КАК Константы",
+             "ВЫБРАТЬ К.Порог КАК П ИЗ Константы КАК К",
+             "ВЫБРАТЬ Константы.Порог КАК П ИЗ Константы",
+             "ВЫБРАТЬ Порог КАК П ИЗ Константы",
+             "выбрать константы.Порог как П из константы как константы",
+             "ВЫБРАТЬ К.Порог КАК П ИЗ Constants КАК К",
+             "ВЫБРАТЬ Constants.Порог КАК П ИЗ Constants",
+             "SELECT Constants.Порог AS П FROM Constants AS Constants",
+         }) {
+        auto j = Check(query, policy);
+        CHECK_EQ(j["verdict"].get<std::string>(), std::string("safe"));
+        CHECK_EQ(FirstOrigin(j), std::string("open"));
+        CHECK(j["missing_tables"].empty());
+    }
+    // a protected constant keeps its class, also behind a reference
+    CHECK_EQ(FirstOrigin(Check("ВЫБРАТЬ Константы.ИмяОрганизации КАК Нм ИЗ Константы КАК Константы", policy)),
+             std::string("protected"));
+    CHECK_EQ(FirstOrigin(Check("ВЫБРАТЬ Константы.Основной.Имя КАК Нм ИЗ Константы КАК Константы", policy)),
+             std::string("protected"));
+    auto like = Check("ВЫБРАТЬ Константы.Порог КАК П ИЗ Константы КАК Константы "
+                      "ГДЕ Константы.ИмяОрганизации ПОДОБНО \"А%\"", policy);
+    CHECK(like["verdict"].get<std::string>() != "safe");
+    CHECK(HasCode(like, "Q_LIKE_PROTECTED"));
+    // a constant the policy does not list stays fail-closed
+    auto unknown = Check("ВЫБРАТЬ Константы.Нет КАК Н ИЗ Константы КАК Константы", policy);
+    CHECK(unknown["verdict"].get<std::string>() != "safe");
+    CHECK(HasCode(unknown, "Q_UNKNOWN_COLUMN"));
+    // a constant object: its Значение is an ordinary field of a dotted table
+    auto value = Check("ВЫБРАТЬ К.Значение КАК З ИЗ Константа.Порог КАК К", policy);
+    CHECK_EQ(value["verdict"].get<std::string>(), std::string("safe"));
+    CHECK_EQ(FirstOrigin(value), std::string("open"));
+}
+
+// Without a "Константы" table the policy is incomplete: the host is asked for it under its Russian key, whatever the
+// spelling in the text.
+TEST(CheckQuery, ConstantsTableMissingFromThePolicy) {
+    for (const char* query : {"ВЫБРАТЬ Константы.Порог КАК П ИЗ Константы КАК Константы",
+                              "ВЫБРАТЬ К.Порог КАК П ИЗ Constants КАК К",
+                              "ВЫБРАТЬ Порог КАК П ИЗ константы"}) {
+        auto j = Check(query, kPolicyABJson);
+        CHECK_EQ(j["verdict"].get<std::string>(), std::string("incomplete"));
+        CHECK_EQ(j["missing_tables"].size(), 1u);
+        CHECK_EQ(j["missing_tables"][0].get<std::string>(), std::string("Константы"));
+    }
+    auto value = Check("ВЫБРАТЬ К.Значение КАК З ИЗ Константа.Порог КАК К", kPolicyABJson);
+    CHECK_EQ(value["verdict"].get<std::string>(), std::string("incomplete"));
+    CHECK_EQ(value["missing_tables"][0].get<std::string>(), std::string("Константа.Порог"));
+}
+
+// A temporary table created earlier in the batch under the name Константы shadows the constants table: its column
+// (protected here) wins over the open policy field of the same name.
+TEST(CheckQuery, TempTableNamedConstantsShadowsTheConstantsTable) {
+    const char* query = "ВЫБРАТЬ А.Имя КАК Порог ПОМЕСТИТЬ Константы ИЗ Справочник.А КАК А; "
+                        "ВЫБРАТЬ Константы.Порог КАК П ИЗ Константы КАК Константы";
+    for (const std::string& policy : {ConstantsPolicy(), kPolicyABJson}) {
+        auto j = Check(query, policy);
+        CHECK_EQ(j["verdict"].get<std::string>(), std::string("safe"));
+        CHECK_EQ(FirstOrigin(j), std::string("protected"));
+        CHECK(j["missing_tables"].empty());
+    }
+}

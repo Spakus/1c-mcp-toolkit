@@ -12,6 +12,7 @@ namespace lineage::strict {
 namespace {
 
 constexpr int kMaxSelectDepth = 128;   // nesting of subqueries; the parser already caps it, this is a backstop
+constexpr const char* kConstantsTable = "Константы";   // the only source name without a dot that is not a temp table
 
 struct TempTable {
     std::vector<Column> columns;
@@ -152,8 +153,21 @@ private:
             }
             return;
         }
-        b.kind = Binding::Kind::Temp;   // a name without a dot can only be a temporary table
+        // A name without a dot is a temporary table, or else the constants table (Константы / Constants), whose
+        // policy key is always "Константы". A temporary table created earlier in the batch under that name wins.
         const TempTable* temp = FindTemp(src.name);
+        const std::string key = ScopeKey(src.name);
+        if (temp == nullptr && (key == ScopeKey(kConstantsTable) || key == ScopeKey("Constants"))) {
+            b.kind = Binding::Kind::Table;
+            b.table = kConstantsTable;
+            b.known = policy_.HasTable(kConstantsTable);
+            if (!b.known) {
+                sink_.MissingTable(kConstantsTable);
+                sink_.Issue(kResolveUnknownSource, src.pos);
+            }
+            return;
+        }
+        b.kind = Binding::Kind::Temp;
         if (temp == nullptr) {
             b.known = false;
             sink_.Issue(kResolveUnknownTemp, src.pos);

@@ -90,6 +90,19 @@
         "СчетКт": {"class": "open", "refs": ["ПланСчетов.Хозрасчетный"]},
         "Сумма": {"class": "open"}
       }
+    },
+    "Константы": {
+      "presentation": "protected",
+      "fields": {
+        "КоличествоПотоков": {"class": "open"},
+        "ИмяОрганизации": {"class": "protected"}
+      }
+    },
+    "Константа.КоличествоПотоков": {
+      "presentation": "protected",
+      "fields": {
+        "Значение": {"class": "open"}
+      }
     }
   },
   "virtual_tables": {

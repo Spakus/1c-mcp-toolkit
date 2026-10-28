@@ -1097,3 +1097,18 @@ TEST(Origin, DerivedTableInsideTempChain) {
         "ВЫБРАТЬ Х.К КАК К ПОМЕСТИТЬ ВТ ИЗ (ВЫБРАТЬ ПОДСТРОКА(А.Имя,1,1) КАК К ИЗ Справочник.А КАК А) КАК Х; "
         "ВЫБРАТЬ ВТ.К КАК К ИЗ ВТ КАК ВТ"), "Q_FUNC_OVER_PROTECTED"));
 }
+
+TEST(Origin, ConstantsTableIsNotATempTable) {
+    auto p = FieldPolicy::FromJson(R"({"version":1,"tables":{"Константы":{"fields":{"Порог":{"class":"open"}}}}})");
+    CHECK(p.ok);
+    auto known = AnalyzeForTest(p.policy, "ВЫБРАТЬ Константы.Порог КАК П ИЗ Константы КАК Константы");
+    CHECK_EQ(FirstOrigin(known), Origin::Open);
+    CHECK(!HasIssue(known, kResolveUnknownTemp));
+    auto missing = AnalyzeForTest(kPolicyAB, "ВЫБРАТЬ К.Порог КАК П ИЗ Constants КАК К");
+    CHECK_EQ(FirstOrigin(missing), Origin::Unknown);
+    CHECK(!HasIssue(missing, kResolveUnknownTemp));
+    CHECK(HasIssue(missing, kResolveUnknownSource));
+    CHECK(missing.missing_tables.size() == 1 && missing.missing_tables.count("Константы") == 1);
+    // any other name without a dot is still a temporary table
+    CHECK(HasIssue(AnalyzeForTest(p.policy, "ВЫБРАТЬ К.Порог КАК П ИЗ Константа КАК К"), kResolveUnknownTemp));
+}
