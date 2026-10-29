@@ -298,6 +298,7 @@ private:
         return IsKw(Kw::Join) || IsKw(Kw::Left) || IsKw(Kw::Right) || IsKw(Kw::Inner) || IsKw(Kw::Full);
     }
     std::string AliasName();
+    std::string SourceAlias();
     std::string SingleName();
     std::vector<ExprP> ExprList();
     void OrderClause(Select& s);
@@ -421,6 +422,8 @@ ExprP P::Primary() {
         case Tk::Identifier:
             return IdentifierExpr();
         case Tk::Keyword:
+            // В.Поле: a source named В (КАК В, see SourceAlias). The operator В never starts an operand.
+            if (t.kw == Kw::In && Peek(1).kind == Tk::Dot) return IdentifierExpr();
             return KeywordExpr();
         case Tk::LParen:
             return Paren();
@@ -602,6 +605,13 @@ std::string P::AliasName() {
     return t.text;
 }
 
+// Alias of a source after an explicit КАК: an identifier, or the keyword В (ИЗ Т КАК В): after КАК it cannot start
+// anything else, and the operator В never starts an operand, so В.Поле is a path (Primary).
+std::string P::SourceAlias() {
+    if (IsKw(Kw::In)) return Next().text;
+    return AliasName();
+}
+
 // A name with exactly one segment (temporary table, alias): no dots.
 std::string P::SingleName() {
     std::string name = AliasName();
@@ -651,9 +661,10 @@ SelectItem P::ItemClause() {
     }
     it.expr = Expr();
     if (AcceptKw(Kw::As)) {
-        // A column may be named like an allowlisted path keyword (КАК Ссылка): after КАК it cannot start anything else.
-        if (Peek().kind == Tk::Keyword && IsAllowedKeywordSegment(Peek().kw)) it.alias = Next().text;
-        else it.alias = AliasName();
+        // A column may be named like an allowlisted path keyword (КАК Ссылка) or В (КАК В): after КАК it cannot start
+        // anything else. A column named В can be defined only, not referred to (bare В and Т.В stay errors).
+        const bool keyword = Peek().kind == Tk::Keyword && (IsAllowedKeywordSegment(Peek().kw) || Peek().kw == Kw::In);
+        it.alias = keyword ? Next().text : AliasName();
         it.alias_explicit = true;
     } else if (Peek().kind == Tk::Identifier) {
         it.alias = AliasName();
@@ -670,8 +681,7 @@ Source P::SourceClause() {
         src.kind = Source::K::Subquery;
         src.subquery = Query(false);
         Expect(Tk::RParen);
-        AcceptKw(Kw::As);
-        src.alias = AliasName();   // a subquery source always needs an alias
+        src.alias = AcceptKw(Kw::As) ? SourceAlias() : AliasName();   // a subquery source always needs an alias
         return src;
     }
     if (Peek().kind != Tk::Identifier) Error("Q_PARSE_EXPECTED", "table expected");
@@ -689,7 +699,7 @@ Source P::SourceClause() {
         }
         Expect(Tk::RParen);
     }
-    if (AcceptKw(Kw::As)) src.alias = AliasName();
+    if (AcceptKw(Kw::As)) src.alias = SourceAlias();
     else if (Peek().kind == Tk::Identifier) src.alias = AliasName();
     return src;
 }

@@ -1,5 +1,6 @@
 #pragma once
 #include <map>
+#include <set>
 #include <vector>
 
 #include "strict/analyzer.h"
@@ -25,6 +26,7 @@ struct LabelTable {
     std::map<const Select*, std::vector<Column>> select_columns;  // result columns of a select (after ОБЪЕДИНИТЬ)
     std::map<const Select*, bool> rows_protected;    // the select's own row set depends on a protected condition
     std::map<const Select*, bool> result_protected;  // ... or that of any ОБЪЕДИНИТЬ part (the whole result)
+    std::set<const Expr*> outer_refs;   // field paths of a subquery that do not resolve in its own sources
 };
 
 // True when a grouping item is also selected as is (same field path): the group key is then returned as a

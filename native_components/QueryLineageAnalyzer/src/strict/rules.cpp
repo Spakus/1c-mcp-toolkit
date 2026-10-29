@@ -243,11 +243,21 @@ private:
             if (a) CollectAggregates(*a, other_aggs);
         }
         for (const Expr* agg : own_aggs) {
-            if (own || AnyArgTainted(*agg)) Add("Q_AGGREGATE_ROWSET", agg->pos);
+            if (own || AnyArgTainted(*agg) || ReadsOuter(*agg)) Add("Q_AGGREGATE_ROWSET", agg->pos);
         }
         for (const Expr* agg : other_aggs) {
-            if (own || whole || AnyArgTainted(*agg)) Add("Q_AGGREGATE_ROWSET", agg->pos);
+            if (own || whole || AnyArgTainted(*agg) || ReadsOuter(*agg)) Add("Q_AGGREGATE_ROWSET", agg->pos);
         }
+    }
+
+    // An aggregate of a subquery over an outer reference is computed over the enclosing query's row set, which
+    // this select's flags do not describe: fail closed.
+    bool ReadsOuter(const Expr& e) const {
+        if (labels_.outer_refs.count(&e) != 0) return true;
+        for (const ExprP& a : e.args) {
+            if (a && ReadsOuter(*a)) return true;
+        }
+        return false;
     }
 
     // Grouping by protected data hides the key unless it is returned as is: the group counts and sums then show

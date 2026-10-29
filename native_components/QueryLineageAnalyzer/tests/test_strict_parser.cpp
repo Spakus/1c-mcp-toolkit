@@ -376,6 +376,11 @@ std::string BatchDump(const std::string& text) {
 
 bool Bad(const std::string& text) { return BatchDump(text).rfind("ERR:", 0) == 0; }
 
+std::string BatchCode(const std::string& text) {
+    auto r = ParseBatchStrict(text);
+    return r.ok ? "OK" : r.error.code;
+}
+
 }  // namespace
 
 TEST(StrictParser, SelectAllClauses) {
@@ -415,6 +420,35 @@ TEST(StrictParser, UnionOrderTotalsAttachToWholeStatement) {
 }
 TEST(StrictParser, SubqueryInFromAndIn) {
     CHECK(ParseBatchStrict("ВЫБРАТЬ П.Х ИЗ (ВЫБРАТЬ Т.Х ИЗ Справочник.Т КАК Т) КАК П ГДЕ П.Х В (ВЫБРАТЬ Р.Х ИЗ Справочник.Р КАК Р)").ok);
+}
+TEST(StrictParser, KeywordВAsSourceAliasAfterKak) {
+    auto r = ParseBatchStrict("ВЫБРАТЬ В.Выполнено КАК Выполнено, КОЛИЧЕСТВО(*) КАК Строк, МИНИМУМ(В.Порядок) КАК Мин "
+                              "ИЗ РегистрСведений.Р КАК В ГДЕ В.Порядок > 1 И НЕ В.Пометка И В.Ссылка В (&А, &Б) "
+                              "СГРУППИРОВАТЬ ПО В.Выполнено");
+    CHECK(r.ok);
+    const Select& s = *r.batch.statements[0].select;
+    CHECK_EQ(s.from[0].alias, std::string("В"));
+    CHECK_EQ(DumpExpr(*s.items[0].expr), std::string("(f В Выполнено)"));
+    CHECK_EQ(DumpExpr(*s.where), std::string("(И (И (> (f В Порядок) 1) (НЕ (f В Пометка))) (in (f В Ссылка) (param &А) "
+                                             "(param &Б)))"));
+    for (const char* ok : {"ВЫБРАТЬ в.Х КАК Х ИЗ (ВЫБРАТЬ 1 КАК Х) КАК в",
+                           "ВЫБРАТЬ А.Х КАК Х ИЗ Справочник.А КАК А ЛЕВОЕ СОЕДИНЕНИЕ Справочник.Б КАК В ПО В.Ссылка = А.Х",
+                           "SELECT in.X AS X FROM Catalog.A AS in WHERE in.Y IN (1)"}) {
+        CHECK_EQ(BatchCode(ok), std::string("OK"));
+    }
+    // A select item named В (defined only: it cannot be referred to).
+    auto item = ParseBatchStrict("ВЫБРАТЬ Т.Х = 1 КАК В, Т.Х КАК Х ИЗ Справочник.А КАК Т");
+    CHECK(item.ok);
+    CHECK(item.batch.statements[0].select->items[0].alias_explicit && item.batch.statements[0].select->items[0].alias == "В");
+    // Only after an explicit КАК, only В, only as the first segment of a path to a source.
+    for (const char* bad : {"ВЫБРАТЬ В.Х КАК Х ИЗ Справочник.А В", "ВЫБРАТЬ Т.Х В ИЗ Справочник.А КАК Т",
+                            "ВЫБРАТЬ В КАК Х ИЗ Справочник.А КАК В", "ВЫБРАТЬ Т.В КАК Х ИЗ Справочник.А КАК Т",
+                            "ВЫБРАТЬ Т.Х КАК В ИЗ Справочник.А КАК Т УПОРЯДОЧИТЬ ПО В",
+                            "ВЫБРАТЬ П.В КАК Х ИЗ (ВЫБРАТЬ 1 КАК В) КАК П",
+                            "ВЫБРАТЬ И.Х КАК Х ИЗ Справочник.А КАК И", "ВЫБРАТЬ 1 КАК Х ПОМЕСТИТЬ В",
+                            "ВЫБРАТЬ А.Х КАК Х ИЗ Справочник.А КАК А ГДЕ А.Х В.У", "ВЫБРАТЬ В.Х() КАК Х ИЗ Справочник.А КАК В"}) {
+        CHECK(Bad(bad));
+    }
 }
 TEST(StrictParser, StatementFailClosed) {
     for (const char* bad : {

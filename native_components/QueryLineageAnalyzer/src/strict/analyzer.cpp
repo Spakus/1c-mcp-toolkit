@@ -358,6 +358,15 @@ private:
                 return l;
             }
         }
+        // A path of a subquery that its own sources cannot resolve reads the enclosing query (outer reference): an
+        // aggregate over it is computed over the outer row set (rules: Q_AGGREGATE_ROWSET).
+        if (scope.parent != nullptr) {
+            Scope own;
+            own.bindings = scope.bindings;
+            if (ResolveFieldPath(e.parts, e.pos, own, policy_, ResolveSink()).origin == Origin::Unknown) {
+                labels_.outer_refs.insert(&e);
+            }
+        }
         return ResolveFieldPath(e.parts, e.pos, scope, policy_, sink_);
     }
 

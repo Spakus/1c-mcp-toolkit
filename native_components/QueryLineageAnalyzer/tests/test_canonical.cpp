@@ -316,6 +316,21 @@ TEST(Canonical, RefusesUnvalidatedTrees) {
     CHECK(Refuses(b));
 }
 
+TEST(Canonical, KeywordВAliasRoundTrip) {
+    RoundTrip("ВЫБРАТЬ В.Выполнено, МИНИМУМ(В.Порядок) ИЗ РегистрСведений.Р КАК В "
+              "ЛЕВОЕ СОЕДИНЕНИЕ (ВЫБРАТЬ 1 КАК Х) КАК in ПО in.Х = В.Х "
+              "ГДЕ НЕ В.Пометка И В.Ссылка В (&А) СГРУППИРОВАТЬ ПО В.Выполнено");
+    RoundTrip("ВЫБРАТЬ Т.А = 1 КАК В, Т.Б КАК in ИЗ Справочник.А КАК Т ОБЪЕДИНИТЬ ВЫБРАТЬ 1 КАК В, 2");
+    CHECK_EQ(Canon("ВЫБРАТЬ КОЛИЧЕСТВО(*) ИЗ Справочник.А КАК В ГДЕ В.Х = 1"),
+             std::string("ВЫБРАТЬ\n\tКОЛИЧЕСТВО(*) КАК Поле1\nИЗ\n\tСправочник.А КАК В\nГДЕ В.Х = 1"));
+    // В as an alias and as the first segment of a longer path; never a bare field or a later segment.
+    CHECK(Refuses(BatchOf(FieldOf("В"), "Х")));
+    CHECK(PrintCanonicalChecked(BatchOf(FieldOf("А"), "В")).ok);
+    ExprP g = FieldOf("А");
+    g->parts.push_back("В");
+    CHECK(Refuses(BatchOf(g, "Х")));
+}
+
 TEST(Canonical, RefusesKeywordsAndHomoglyphsAsNames) {
     CHECK(Refuses(BatchOf(FieldOf("ВЫБРАТЬ"))));                 // keyword as the first path segment
     CHECK(Refuses(BatchOf(FieldOf("select"))));

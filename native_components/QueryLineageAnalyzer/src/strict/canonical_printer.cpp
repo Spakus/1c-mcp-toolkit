@@ -47,6 +47,12 @@ bool IsAllowedKeywordSegment(const std::string& s) {
     return kw == Kw::Refs || kw == Kw::Presentation || kw == Kw::RefPresentation || kw == Kw::Value;
 }
 
+// The keyword В as an alias after КАК (ИЗ Т КАК В, Т.Х КАК В) and as the first segment of a path to a source (В.Поле).
+bool IsInKeywordAlias(const std::string& s) {
+    Kw kw = Kw::None;
+    return LexesAs(s, Tk::Keyword, &kw) && kw == Kw::In;
+}
+
 bool IsDigits(const std::string& s) {
     return !s.empty() && std::all_of(s.begin(), s.end(), [](char c) { return c >= '0' && c <= '9'; });
 }
@@ -261,7 +267,8 @@ private:
         if (e.parts.empty()) Fail("Q_PRINT_IDENT", "empty path");
         for (size_t i = 0; i < e.parts.size(); ++i) {
             const std::string& p = e.parts[i];
-            if (!(IsPlainIdent(p) || (i > 0 && IsAllowedKeywordSegment(p)))) Fail("Q_PRINT_IDENT", "path segment");
+            const bool keyword_ok = i > 0 ? IsAllowedKeywordSegment(p) : e.parts.size() > 1 && IsInKeywordAlias(p);
+            if (!(IsPlainIdent(p) || keyword_ok)) Fail("Q_PRINT_IDENT", "path segment");
             if (i != 0) W(".");
             W(p);
         }
@@ -393,7 +400,8 @@ private:
         }
         if (!src.alias.empty()) {
             W(" КАК ");
-            Ident(src.alias, "source alias");
+            if (IsInKeywordAlias(src.alias)) W(src.alias);
+            else Ident(src.alias, "source alias");
         } else if (src.kind == Source::K::Subquery) {
             Fail("Q_PRINT_IDENT", "subquery source alias");
         }
@@ -420,7 +428,9 @@ private:
         Child(it.expr, 0);
         if (!name.empty()) {
             W(" КАК ");
-            if (!IsPlainIdent(name) && !IsAllowedKeywordSegment(name)) Fail("Q_PRINT_IDENT", "item alias");
+            if (!IsPlainIdent(name) && !IsAllowedKeywordSegment(name) && !IsInKeywordAlias(name)) {
+                Fail("Q_PRINT_IDENT", "item alias");
+            }
             W(name);
         }
     }
