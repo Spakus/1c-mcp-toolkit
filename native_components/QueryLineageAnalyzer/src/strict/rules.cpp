@@ -350,16 +350,32 @@ private:
         return true;
     }
 
+    // Every target of a reference has an open presentation (the platform sorts a reference by it under
+    // АВТОУПОРЯДОЧИВАНИЕ); a reference whose targets were lost has none known.
+    bool PresentationsOpen(const std::vector<std::string>& refs, bool refs_known) const {
+        if (!refs_known) return false;
+        for (const std::string& target : refs) {
+            if (!policy_.HasTable(target) || policy_.PresentationClass(target) != FieldClass::Open) return false;
+        }
+        return true;
+    }
+
+    // АВТОУПОРЯДОЧИВАНИЕ replaces a reference by the default sort fields of its table, its presentation: that holds
+    // for the selected columns and for the ordering expressions, selected or not.
     bool AutoorderTainted(const Select& s) const {
         const auto it = labels_.select_columns.find(&s);
         if (it == labels_.select_columns.end()) return true;
         for (const Column& c : it->second) {
             if (Tainted(c.origin) || c.origin == Origin::Unknown) return true;
-            // automatic ordering sorts a reference by its presentation
-            if (!c.refs_known) return true;   // may be a reference whose targets were lost
-            for (const std::string& target : c.refs) {
-                if (!policy_.HasTable(target) || policy_.PresentationClass(target) != FieldClass::Open) return true;
-            }
+            if (!PresentationsOpen(c.refs, c.refs_known)) return true;
+        }
+        std::vector<const Expr*> ordered;
+        for (const OrderItem& o : s.order_by) ordered.push_back(o.expr.get());
+        for (const TotalsItem& t : s.totals_by) ordered.push_back(t.expr.get());
+        for (const Expr* e : ordered) {
+            if (e == nullptr) continue;
+            const auto label = labels_.expr.find(e);
+            if (label == labels_.expr.end() || !PresentationsOpen(label->second.refs, label->second.refs_known)) return true;
         }
         return false;
     }

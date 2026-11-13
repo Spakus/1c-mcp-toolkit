@@ -30,6 +30,8 @@ const char* const kPolicy = R"({
     "Документ.Реализация": {"presentation": "protected", "fields": {
       "Ссылка": {"class": "open", "refs": ["Документ.Реализация"]}, "Номер": {"class": "open"},
       "Контрагент": {"class": "open", "refs": ["Справочник.Контрагенты"]}}},
+    "РегистрНакопления.Взаиморасчеты": {"presentation": "protected", "fields": {
+      "Контрагент": {"class": "open", "refs": ["Справочник.Контрагенты"]}, "Сумма": {"class": "open"}}},
     "РегистрСведений.Правила": {"presentation": "protected", "fields": {
       "ИмяПравила": {"class": "protected"}, "Порядок": {"class": "open"}, "Загружено": {"class": "open"},
       "Текст": {"class": "protected"}}}
@@ -684,4 +686,27 @@ TEST(StrictGate, ComputedFindRowsFilterOverProtectedColumnIsAnEqualityOracle) {
              std::string("safe"));
     CHECK_EQ(V(C(table + "Для Н = 1 По 5 Цикл Р.Добавить(ТЗ.НайтиСтроки(Новый Структура(\"Порядок\", Н)).Количество()); "
                          "КонецЦикла;\nРезультат = Р;")), std::string("safe"));
+}
+
+// ---- АВТОУПОРЯДОЧИВАНИЕ sorts a reference by its presentation ----
+
+TEST(StrictGate, AutoorderByReferenceWithProtectedPresentationAsksSelectedOrNot) {
+    for (const char* text : {
+             "ВЫБРАТЬ ПЕРВЫЕ 1 Д.Номер КАК Н ИЗ Документ.Реализация КАК Д УПОРЯДОЧИТЬ ПО Д.Контрагент АВТОУПОРЯДОЧИВАНИЕ",
+             "ВЫБРАТЬ Д.Номер КАК Н ИЗ Документ.Реализация КАК Д УПОРЯДОЧИТЬ ПО Д.Контрагент АВТОУПОРЯДОЧИВАНИЕ",
+             "ВЫБРАТЬ ПЕРВЫЕ 1 В.Сумма КАК Н ИЗ РегистрНакопления.Взаиморасчеты КАК В УПОРЯДОЧИТЬ ПО В.Контрагент "
+             "АВТОУПОРЯДОЧИВАНИЕ",
+             "ВЫБРАТЬ Д.Контрагент КАК К, Д.Номер КАК Н ИЗ Документ.Реализация КАК Д УПОРЯДОЧИТЬ ПО К АВТОУПОРЯДОЧИВАНИЕ"}) {
+        const Json j = Q(text);
+        CHECK_EQ(V(j), std::string("confirm"));
+        CHECK(Has(j, "Q_ORDER_PROTECTED"));
+    }
+    // a reference whose presentation is open sorts by it without a window
+    CHECK_EQ(V(Q("ВЫБРАТЬ К.Порядок КАК П ИЗ Справочник.Контрагенты КАК К УПОРЯДОЧИТЬ ПО К.Группа АВТОУПОРЯДОЧИВАНИЕ")),
+             std::string("safe"));
+    // a plain ordering by a reference (no autoorder) stays open until the platform proves what it sorts by
+    CHECK_EQ(V(Q("ВЫБРАТЬ ПЕРВЫЕ 1 Д.Номер КАК Н ИЗ Документ.Реализация КАК Д УПОРЯДОЧИТЬ ПО Д.Контрагент")),
+             std::string("safe"));
+    CHECK_EQ(V(Q("ВЫБРАТЬ Д.Номер КАК Н ИЗ Документ.Реализация КАК Д УПОРЯДОЧИТЬ ПО Д.Номер АВТОУПОРЯДОЧИВАНИЕ")),
+             std::string("safe"));
 }
