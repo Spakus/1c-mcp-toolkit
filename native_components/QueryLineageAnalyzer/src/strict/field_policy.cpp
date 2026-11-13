@@ -96,6 +96,11 @@ bool ParseFieldInfo(const Json& v, FieldInfo* out) {
         if (!allowed->is_boolean()) return false;
         out->compare_allowed = allowed->get<bool>();
     }
+    const auto origin = v.find("origin_id");
+    if (origin != v.end()) {
+        if (!origin->is_string()) return false;
+        out->display = origin->get<std::string>();
+    }
     const auto cls = v.find("class");
     if (cls == v.end() || !ParseClass(*cls, &out->cls)) return false;
     const auto refs = v.find("refs");
@@ -113,7 +118,7 @@ bool ParseFields(const Json& v, const std::string& table_display, FieldMap* out)
     for (auto it = v.begin(); it != v.end(); ++it) {
         FieldInfo info;
         if (!ParseFieldInfo(it.value(), &info)) return false;
-        info.display = table_display + "." + it.key();
+        if (info.display.empty()) info.display = table_display + "." + it.key();   // "origin_id" wins when the host sent it
         MergeField(*out, NormalizeIdentifierKey(it.key()), std::move(info));
     }
     return true;

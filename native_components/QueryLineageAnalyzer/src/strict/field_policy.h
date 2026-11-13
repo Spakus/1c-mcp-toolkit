@@ -38,8 +38,9 @@ struct FieldInfo {
     // false: a reference whose targets the policy does not list (Узел of a change table); its presentation is not
     // known, so it is never read as a string or ordered by without confirmation.
     bool refs_known = true;
-    // "<Table>.<Field>" (a tabular section: "<Table>.<Section>.<Field>") spelled as the host wrote the policy; the
-    // name an oracle reason reports and the key "compare_allowed" is looked up by (CompareAllowed).
+    // The field's "origin_id" when the host sent one; else "<Table>.<Field>" (a tabular section:
+    // "<Table>.<Section>.<Field>") spelled as the host wrote the policy. The name an oracle reason reports and the key
+    // "compare_allowed" is looked up by (CompareAllowed).
     std::string display;
     // The host lets the model compare this field in parts (ПОДОБНО, <, >, МЕЖДУ, string functions): oracle primitives
     // over it add no reason. The value stays protected for the output labelling. Colliding names merge to false.

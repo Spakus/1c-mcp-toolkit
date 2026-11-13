@@ -37,10 +37,22 @@ const char* const kPolicy = R"({
 const char* const kNameField = "Справочник.Контрагенты.Наименование";
 const char* const kInnField = "Справочник.Контрагенты.ИНН";
 
-// kPolicy with "compare_allowed" on the given fields ("Таблица.Поле") and, when `deny` is not null, "deny_effects".
+// kPolicy with "compare_allowed" on the given fields ("Таблица.Поле", or "Таблица|Секция|Поле" with the policy keys) and, when `deny` is not null, "deny_effects".
 std::string Policy(const std::vector<std::string>& allowed = {}, const Json* deny = nullptr) {
     Json p = Json::parse(kPolicy);
     for (const std::string& f : allowed) {
+        // "Таблица|Поле" or "Таблица|Секция|Поле" names the keys of the policy; "Таблица.Поле" splits at the last dot
+        const size_t first = f.find('|');
+        if (first != std::string::npos) {
+            const size_t last = f.rfind('|');
+            if (first == last) {
+                p["tables"][f.substr(0, first)]["fields"][f.substr(first + 1)]["compare_allowed"] = true;
+            } else {
+                p["tables"][f.substr(0, first)]["tabular_sections"][f.substr(first + 1, last - first - 1)]["fields"]
+                 [f.substr(last + 1)]["compare_allowed"] = true;
+            }
+            continue;
+        }
         const size_t dot = f.rfind('.');
         p["tables"][f.substr(0, dot)]["fields"][f.substr(dot + 1)]["compare_allowed"] = true;
     }
@@ -316,4 +328,123 @@ TEST(StrictGate, KeywordAliasesStayRefused) {
         CHECK(Has(Q(std::string("ВЫБРАТЬ К.Порядок КАК ") + alias + " ИЗ Справочник.Контрагенты КАК К"), "Q_PARSE_EXPECTED"));
     }
     CHECK(Has(C("И = 0; Результат = И;"), "C_PARSE"));
+}
+
+// ---- the field of a reason is the host's origin id ----
+
+namespace {
+
+// A policy with a tabular section, registers, a virtual table and a constant; `with_ids` adds the host's origin_id.
+Json OriginPolicy(bool with_ids) {
+    Json p = Json::parse(R"({
+      "version": 1,
+      "tables": {
+        "Документ.Заказ": {"presentation": "protected",
+          "fields": {"Номер": {"class": "protected"}},
+          "tabular_sections": {"Товары": {"fields": {"Комментарий": {"class": "protected"}}}}},
+        "РегистрБухгалтерии.Хозрасчетный": {"presentation": "open", "fields": {
+          "СуммаДт": {"class": "protected"}, "Субконто1": {"class": "protected"}}},
+        "РегистрСведений.Правила": {"presentation": "open", "fields": {"ИмяПравила": {"class": "protected"}}},
+        "РегистрНакопления.Товары": {"presentation": "open", "fields": {"Количество": {"class": "protected"}}},
+        "Константа.Префикс": {"presentation": "open", "fields": {"Значение": {"class": "protected"}}}
+      },
+      "virtual_tables": {"РегистрНакопления.Товары.Остатки": {"base": "РегистрНакопления.Товары",
+        "extra_fields": {"КоличествоОстаток": {"class": "protected"}}}}
+    })");
+    if (!with_ids) return p;
+    Json& t = p["tables"];
+    t["Документ.Заказ"]["fields"]["Номер"]["origin_id"] = "Документ.Заказ.Номер";
+    t["Документ.Заказ"]["tabular_sections"]["Товары"]["fields"]["Комментарий"]["origin_id"] =
+        "Документ.Заказ.Товары.Комментарий";
+    t["РегистрБухгалтерии.Хозрасчетный"]["fields"]["СуммаДт"]["origin_id"] = "РегистрБухгалтерии.Хозрасчетный.СуммаДт";
+    t["РегистрБухгалтерии.Хозрасчетный"]["fields"]["Субконто1"]["origin_id"] = "РегистрБухгалтерии.Хозрасчетный.Субконто1";
+    t["РегистрСведений.Правила"]["fields"]["ИмяПравила"]["origin_id"] = "РегистрСведений.Правила.ИмяПравила";
+    t["РегистрНакопления.Товары"]["fields"]["Количество"]["origin_id"] = "РегистрНакопления.Товары.Количество";
+    p["virtual_tables"]["РегистрНакопления.Товары.Остатки"]["extra_fields"]["КоличествоОстаток"]["origin_id"] =
+        "РегистрНакопления.Товары.Количество";
+    t["Константа.Префикс"]["fields"]["Значение"]["origin_id"] = "Константа.Префикс";
+    return p;
+}
+
+std::string LikeOn(const std::string& table, const std::string& field) {
+    return "ВЫБРАТЬ 1 КАК Х ИЗ " + table + " КАК Т ГДЕ Т." + field + " ПОДОБНО \"а%\"";
+}
+
+std::set<std::string> Fields(const Json& j) {
+    std::set<std::string> out;
+    for (const Json& r : j["reasons"]) {
+        if (r.contains("field")) out.insert(r["field"].get<std::string>());
+    }
+    return out;
+}
+
+}  // namespace
+
+TEST(StrictGate, ReasonFieldEchoesOriginId) {
+    const std::string pol = OriginPolicy(true).dump();
+    // a tabular section, an accounting register (Дт, Субконто), an information register dimension
+    CHECK(Fields(Q(LikeOn("Документ.Заказ.Товары", "Комментарий"), pol)) ==
+          (std::set<std::string>{"Документ.Заказ.Товары.Комментарий"}));
+    CHECK(Fields(Q(LikeOn("РегистрБухгалтерии.Хозрасчетный", "СуммаДт"), pol)) ==
+          (std::set<std::string>{"РегистрБухгалтерии.Хозрасчетный.СуммаДт"}));
+    CHECK(Fields(Q(LikeOn("РегистрБухгалтерии.Хозрасчетный", "Субконто1"), pol)) ==
+          (std::set<std::string>{"РегистрБухгалтерии.Хозрасчетный.Субконто1"}));
+    CHECK(Fields(Q(LikeOn("РегистрСведений.Правила", "ИмяПравила"), pol)) ==
+          (std::set<std::string>{"РегистрСведений.Правила.ИмяПравила"}));
+    // the virtual table's extra field reports the base origin the host gave it
+    CHECK(Fields(Q(LikeOn("РегистрНакопления.Товары.Остатки", "КоличествоОстаток"), pol)) ==
+          (std::set<std::string>{"РегистрНакопления.Товары.Количество"}));
+    // a constant
+    CHECK(Fields(Q(LikeOn("Константа.Префикс", "Значение"), pol)) == (std::set<std::string>{"Константа.Префикс"}));
+}
+
+TEST(StrictGate, ReasonFieldKeepsPolicySpellingWithoutOriginId) {
+    const std::string pol = OriginPolicy(false).dump();
+    CHECK(Fields(Q(LikeOn("Документ.Заказ.Товары", "Комментарий"), pol)) ==
+          (std::set<std::string>{"Документ.Заказ.Товары.Комментарий"}));
+    CHECK(Fields(Q(LikeOn("РегистрБухгалтерии.Хозрасчетный", "СуммаДт"), pol)) ==
+          (std::set<std::string>{"РегистрБухгалтерии.Хозрасчетный.СуммаДт"}));
+    CHECK(Fields(Q(LikeOn("РегистрНакопления.Товары.Остатки", "КоличествоОстаток"), pol)) ==
+          (std::set<std::string>{"РегистрНакопления.Товары.Остатки.КоличествоОстаток"}));
+    CHECK(Fields(Q(LikeOn("Константа.Префикс", "Значение"), pol)) == (std::set<std::string>{"Константа.Префикс.Значение"}));
+}
+
+TEST(StrictGate, ReasonFieldIgnoresQueryCase) {
+    const std::string pol = OriginPolicy(true).dump();
+    CHECK(Fields(Q(LikeOn("документ.заказ.товары", "комментарий"), pol)) ==
+          (std::set<std::string>{"Документ.Заказ.Товары.Комментарий"}));
+}
+
+TEST(StrictGate, CompareAllowedFollowsOriginId) {
+    // allowed on a tabular key
+    Json p = OriginPolicy(true);
+    p["tables"]["Документ.Заказ"]["tabular_sections"]["Товары"]["fields"]["Комментарий"]["compare_allowed"] = true;
+    CHECK_EQ(V(Q(LikeOn("Документ.Заказ.Товары", "Комментарий"), p.dump())), std::string("safe"));
+    // the same through the helper: a key path of the policy
+    CHECK_EQ(V(Q(kWhere + "К.Наименование ПОДОБНО \"а%\"", Policy({"Справочник.Контрагенты|Наименование"}))), std::string("safe"));
+    // the virtual extra shares the base origin: both copies allowed opens it, one copy denied closes it (AND)
+    Json v = OriginPolicy(true);
+    v["tables"]["РегистрНакопления.Товары"]["fields"]["Количество"]["compare_allowed"] = true;
+    v["virtual_tables"]["РегистрНакопления.Товары.Остатки"]["extra_fields"]["КоличествоОстаток"]["compare_allowed"] = true;
+    CHECK_EQ(V(Q(LikeOn("РегистрНакопления.Товары.Остатки", "КоличествоОстаток"), v.dump())), std::string("safe"));
+    Json m = v;
+    m["virtual_tables"]["РегистрНакопления.Товары.Остатки"]["extra_fields"]["КоличествоОстаток"]["compare_allowed"] = false;
+    CHECK_EQ(V(Q(LikeOn("РегистрНакопления.Товары", "Количество"), m.dump())), std::string("confirm"));
+    // a Cyrillic/Latin mixed table key
+    Json x = Json::parse(R"({"version": 1, "tables": {"Документ.Zаказ": {"presentation": "open", "fields": {
+        "Номер": {"class": "protected", "compare_allowed": true, "origin_id": "Документ.Zаказ.Номер"}}}}})");
+    CHECK_EQ(V(Q(LikeOn("Документ.Zаказ", "Номер"), x.dump())), std::string("safe"));
+}
+
+TEST(StrictGate, OriginIdOfWrongTypeIsPolicyShapeError) {
+    for (const char* bad : {"5", "true", "null", "[\"а\"]", "{}"}) {
+        Json p = OriginPolicy(false);
+        p["tables"]["Документ.Заказ"]["fields"]["Номер"]["origin_id"] = Json::parse(bad);
+        CHECK(Has(Q("ВЫБРАТЬ 1 КАК Х", p.dump()), "Q_POLICY_INVALID"));
+        CHECK(Has(C("Результат = 1;", p.dump()), "C_POLICY_INVALID"));
+    }
+    // inside a tabular section too
+    Json s = OriginPolicy(false);
+    s["tables"]["Документ.Заказ"]["tabular_sections"]["Товары"]["fields"]["Комментарий"]["origin_id"] = 1;
+    CHECK(Has(Q("ВЫБРАТЬ 1 КАК Х", s.dump()), "Q_POLICY_INVALID"));
 }
