@@ -542,7 +542,13 @@ std::vector<std::string> HostDenyList() {
     "DynamicListsUserSettingsStorage.Delete", "ХранилищеНастроекДанныхФорм.Сохранить",
     "ХранилищеНастроекДанныхФорм.Save", "ХранилищеНастроекДанныхФорм.Удалить", "ХранилищеНастроекДанныхФорм.Delete",
     "FormDataSettingsStorage.Сохранить", "FormDataSettingsStorage.Save", "FormDataSettingsStorage.Удалить",
-    "FormDataSettingsStorage.Delete"};
+    "FormDataSettingsStorage.Delete",
+    "COMОбъект", "COMObject", "HTTPСоединение", "HTTPConnection", "FTPСоединение", "FTPConnection", "ИнтернетПочта",
+    "InternetMail", "WSПрокси", "WSProxy", "WSОпределения", "WSDefinitions", "ЗащищенноеСоединениеOpenSSL",
+    "OpenSSLSecureConnection", "ЗапуститьПриложение", "RunApp", "НачатьЗапускПриложения", "BeginRunningApplication",
+    "КомандаСистемы", "System", "ЗапуститьСистему", "RunSystem", "ПодключитьВнешнююКомпоненту", "AttachAddIn",
+    "НачатьПодключениеВнешнейКомпоненты", "BeginAttachingAddIn", "ЗагрузитьВнешнююКомпоненту", "LoadAddIn",
+    "УстановитьВнешнююКомпоненту", "InstallAddIn"};
 }
 
 }  // namespace
@@ -554,6 +560,11 @@ TEST(StrictGate, HostDenyListIsAcceptedByThePolicyValidator) {
     CHECK_EQ(DenyOf(deny.get<std::vector<std::string>>(), "ХранилищеОбщихНастроек.Сохранить(\"а\", \"б\", 1);"),
              std::string("deny"));
     CHECK_EQ(DenyOf(deny.get<std::vector<std::string>>(), "ПодключитьВнешнююОбработку(\"а\");"), std::string("deny"));
+    const std::vector<std::string> list = deny.get<std::vector<std::string>>();
+    CHECK_EQ(DenyOf(list, "О = Новый COMОбъект(\"Scripting.FileSystemObject\"); Результат = 1;"), std::string("deny"));
+    CHECK_EQ(DenyOf(list, "С = Новый HTTPСоединение(\"127.0.0.1\", 9); Результат = 1;"), std::string("deny"));
+    CHECK_EQ(DenyOf(list, "ЗапуститьПриложение(\"cmd.exe /c exit\"); Результат = 1;"), std::string("deny"));
+    CHECK_EQ(DenyOf(list, "Результат = 1;"), std::string("safe"));
 }
 
 TEST(StrictGate, HostPolicyShapeKeepsSelfCallsAndSessionWritesOutOfSafe) {
