@@ -438,7 +438,8 @@ private:
     FieldLabel LabelParam(const Expr& e) {
         switch (policy_.OriginOfParam(e.text)) {
             // A parameter may be a reference whose targets are not known.
-            case ParamOrigin::Client: return Plain(Origin::Client, false);
+            case ParamOrigin::Client:
+            case ParamOrigin::ClientComputed: return Plain(Origin::Client, false);
             case ParamOrigin::TokenProtected: {   // equality operand; the token has no policy field
                 FieldLabel l = Plain(Origin::ProtectedDirect, false);
                 l.attr.unattributed = true;

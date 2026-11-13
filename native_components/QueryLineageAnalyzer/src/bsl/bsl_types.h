@@ -154,6 +154,7 @@ struct ObjectLabels {
     std::optional<Origin> content;       // values stored in the collection (nested collections included)
     std::optional<Origin> shape;         // pc of every mutation: what its size and key set depend on
     std::optional<Origin> keys;          // Соответствие keys
+    bool computed = false;               // a stored value is not constant text the code wrote (see ParamBinding)
     std::set<std::string> refs;          // reference targets among the stored values
     bool ref_unknown = false;            // a stored value may be a reference with unknown targets
     std::set<const Expr*> nested;        // collections stored in it
@@ -163,7 +164,7 @@ struct ObjectLabels {
     SlotLabels key_slot;                 // map keys
     std::map<std::string, FieldSlot> fields;   // structure keys by AllowlistKey
     bool operator==(const ObjectLabels& o) const {
-        return content == o.content && shape == o.shape && keys == o.keys && refs == o.refs &&
+        return content == o.content && shape == o.shape && keys == o.keys && computed == o.computed && refs == o.refs &&
                ref_unknown == o.ref_unknown && nested == o.nested && kind == o.kind && elem == o.elem &&
                key_slot == o.key_slot && fields == o.fields;
     }
@@ -172,7 +173,13 @@ struct ObjectLabels {
 struct ParamBinding {
     Origin label = Origin::Open;         // join of every value the code binds to the parameter
     std::set<std::string> spellings;     // names as written (ё kept), for the policy lookup of the query check
-    bool operator==(const ParamBinding& o) const { return label == o.label && spellings == o.spellings; }
+    // Some bound value is not constant text the code wrote (a literal or a fold of literals): a loop counter, a
+    // concatenation, a function result, a collection filled from such values. Such a client value is not an equality
+    // filter against a protected field (ParamOrigin::ClientComputed).
+    bool computed = false;
+    bool operator==(const ParamBinding& o) const {
+        return label == o.label && spellings == o.spellings && computed == o.computed;
+    }
 };
 
 struct LabelState {
@@ -191,7 +198,7 @@ struct LabelState {
 struct CodeReason {
     std::string code;
     Pos pos;
-    std::string op;      // oracle primitive of a C_FUNC_OVER_PROTECTED / Q_* reason: "like" | "range" | "strfunc"
+    std::string op;      // oracle primitive of a C_FUNC_OVER_PROTECTED / Q_* reason: "like" | "range" | "strfunc" | "eq"
     std::string field;   // the policy field it probes (set by the CheckCode layer for C_*, by CheckQuery for Q_*)
 };
 

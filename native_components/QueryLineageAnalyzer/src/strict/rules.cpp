@@ -483,9 +483,12 @@ private:
             return;
         }
         const Expr* other = ta ? b : a;
-        if (other != nullptr && other->kind == Expr::K::Param &&
-            policy_.OriginOfParam(other->text) == ParamOrigin::TokenUnknown) {
+        const ParamOrigin param = other != nullptr && other->kind == Expr::K::Param ? policy_.OriginOfParam(other->text)
+                                                                                    : ParamOrigin::Missing;
+        if (param == ParamOrigin::TokenUnknown) {
             Add("Q_EQ_UNKNOWN_TOKEN", pos);
+        } else if (param == ParamOrigin::ClientComputed) {
+            AddOracle("Q_EQ_CLIENT_PARAM", "eq", node, pos);   // a computed value: a loop enumerates guesses
         } else if (other != nullptr && IsLiteral(*other)) {
             Add("Q_EQ_LITERAL", pos);
         } else {

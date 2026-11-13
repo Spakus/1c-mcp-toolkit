@@ -23,10 +23,13 @@ const char* const kPolicy = R"({
   "tables": {
     "Справочник.Контрагенты": {"presentation": "protected", "fields": {
       "Ссылка": {"class": "open", "refs": ["Справочник.Контрагенты"]},
-      "Наименование": {"class": "protected"}, "ИНН": {"class": "protected"},
+      "Наименование": {"class": "protected"}, "ИНН": {"class": "protected"}, "Код": {"class": "protected"},
       "Порядок": {"class": "open"}, "Группа": {"class": "open", "refs": ["Справочник.Группы"]}}},
     "Справочник.Группы": {"presentation": "open", "fields": {
       "Ссылка": {"class": "open", "refs": ["Справочник.Группы"]}, "Наименование": {"class": "open"}}},
+    "Документ.Реализация": {"presentation": "protected", "fields": {
+      "Ссылка": {"class": "open", "refs": ["Документ.Реализация"]}, "Номер": {"class": "open"},
+      "Контрагент": {"class": "open", "refs": ["Справочник.Контрагенты"]}}},
     "РегистрСведений.Правила": {"presentation": "protected", "fields": {
       "ИмяПравила": {"class": "protected"}, "Порядок": {"class": "open"}, "Загружено": {"class": "open"},
       "Текст": {"class": "protected"}}}
@@ -591,4 +594,94 @@ TEST(StrictGate, FullHostDenyListParsesAndIsSafeForPlainCode) {
     CHECK_EQ(V(C("ХранилищеСистемныхНастроек.Удалить(1);", pol)), std::string("deny"));
     CHECK_EQ(V(C("SystemSettingsStorage.Save(1);", pol)), std::string("deny"));
     CHECK_EQ(V(C("ВнешниеОбработки.Создать(\"x\");", pol)), std::string("deny"));
+}
+
+// ---- computed values reaching a protected field by equality are an oracle ----
+
+namespace {
+
+const std::string kParamHead =
+    "З = Новый Запрос(\"ВЫБРАТЬ К.Ссылка КАК С ИЗ Справочник.Контрагенты КАК К ГДЕ К.Код = &Код\");\n";
+
+std::string EqOracle(const char* field) { return std::string("C_FUNC_OVER_PROTECTED/eq@") + field; }
+std::string QEqOracle(const char* field) { return std::string("Q_EQ_CLIENT_PARAM/eq@") + field; }
+
+}  // namespace
+
+TEST(StrictGate, ComputedQueryParameterBindingIsAnEqualityOracle) {
+    const std::string loop =
+        "Р = Новый Массив;\nДля Н = 1 По 100 Цикл\n    З.УстановитьПараметр(\"Код\", Формат(Н, \"ЧГ=\"));\n"
+        "    Если Не З.Выполнить().Пустой() Тогда Р.Добавить(Н); КонецЕсли;\nКонецЦикла;\nРезультат = Р;\n";
+    const Json j = C(kParamHead + loop);
+    CHECK_EQ(V(j), std::string("confirm"));
+    CHECK(Oracles(j).count(QEqOracle("Справочник.Контрагенты.Код")) == 1);
+    // a concatenation with a loop counter
+    CHECK_EQ(V(C(kParamHead + "Для Н = 1 По 9 Цикл З.УстановитьПараметр(\"Код\", \"А\" + Строка(Н)); "
+                              "Результат = З.Выполнить().Пустой(); КонецЦикла;")), std::string("confirm"));
+    // a list built in a loop
+    const std::string list =
+        "М = Новый Массив;\nДля Ит = 1 По 100 Цикл М.Добавить(Формат(Ит, \"ЧГ=\")); КонецЦикла;\n"
+        "З = Новый Запрос(\"ВЫБРАТЬ К.Ссылка ИЗ Справочник.Контрагенты КАК К ГДЕ К.Наименование В (&Список)\");\n"
+        "З.УстановитьПараметр(\"Список\", М);\nРезультат = З.Выполнить().Выгрузить().Количество();\n";
+    const Json l = C(list);
+    CHECK_EQ(V(l), std::string("confirm"));
+    CHECK(Oracles(l).count(QEqOracle(kNameField)) == 1);
+    // a computed value joined with a literal on another path is still computed
+    CHECK_EQ(V(C(kParamHead + "Если Истина Тогда З.УстановитьПараметр(\"Код\", Формат(1, \"ЧГ=\")); "
+                              "Иначе З.УстановитьПараметр(\"Код\", \"1\"); КонецЕсли; Результат = З.Выполнить().Пустой();")),
+             std::string("confirm"));
+}
+
+TEST(StrictGate, ConstantQueryParameterBindingStaysSafe) {
+    CHECK_EQ(V(C(kParamHead + "З.УстановитьПараметр(\"Код\", \"0000123\"); Результат = З.Выполнить().Пустой();")),
+             std::string("safe"));
+    CHECK_EQ(V(C(kParamHead + "К = \"00\" + \"123\"; З.УстановитьПараметр(\"Код\", К); Результат = З.Выполнить().Пустой();")),
+             std::string("safe"));
+    // a literal inside a loop is one guess, not an enumeration
+    CHECK_EQ(V(C(kParamHead + "Для Н = 1 По 3 Цикл З.УстановитьПараметр(\"Код\", \"7\"); КонецЦикла; "
+                              "Результат = З.Выполнить().Пустой();")), std::string("safe"));
+    // an array of literals
+    CHECK_EQ(V(C("М = Новый Массив; М.Добавить(\"а\"); М.Добавить(\"б\");\n"
+                 "З = Новый Запрос(\"ВЫБРАТЬ К.Ссылка ИЗ Справочник.Контрагенты КАК К ГДЕ К.Наименование В (&Список)\");\n"
+                 "З.УстановитьПараметр(\"Список\", М); Результат = З.Выполнить().Пустой();")), std::string("safe"));
+    // an identifier written as a literal is a literal
+    CHECK_EQ(V(C("З = Новый Запрос(\"ВЫБРАТЬ К.Ссылка ИЗ Справочник.Контрагенты КАК К ГДЕ К.Код = &Код\");\n"
+                 "З.УстановитьПараметр(\"Код\", Новый УникальныйИдентификатор(\"21fd4a09-90ac-11f1-9570-005056bcee09\"));\n"
+                 "Результат = З.Выполнить().Пустой();")), std::string("safe"));
+    // a client parameter of the request (query check): a value the caller wrote
+    CHECK_EQ(V(Q(kWhere + "К.Код = &П")), std::string("safe"));
+}
+
+TEST(StrictGate, ComputedFindByCodeArgumentIsAnEqualityOracle) {
+    const std::string loop =
+        "Р = Новый Массив;\nДля Н = 1 По 100 Цикл\n"
+        "    Если Не Справочники.Контрагенты.НайтиПоКоду(Формат(Н, \"ЧГ=\")).Пустая() Тогда Р.Добавить(Н); КонецЕсли;\n"
+        "КонецЦикла;\nРезультат = Р;\n";
+    const Json j = C(loop);
+    CHECK_EQ(V(j), std::string("confirm"));
+    CHECK(Oracles(j).count(EqOracle("Справочник.Контрагенты.Код")) == 1);
+    CHECK_EQ(V(C("Результат = ЗначениеЗаполнено(Справочники.Контрагенты.НайтиПоКоду(Строка(5)));")), std::string("confirm"));
+    // a literal, or a folded constant, stays safe
+    CHECK_EQ(V(C("Результат = Справочники.Контрагенты.НайтиПоКоду(\"0000123\").Пустая();")), std::string("safe"));
+    CHECK_EQ(V(C("Результат = Справочники.Контрагенты.НайтиПоКоду(\"00\" + \"123\").Пустая();")), std::string("safe"));
+}
+
+TEST(StrictGate, ComputedFindRowsFilterOverProtectedColumnIsAnEqualityOracle) {
+    const std::string table =
+        "З = Новый Запрос(\"ВЫБРАТЬ К.Наименование КАК Наим, К.ИНН КАК Инн, К.Порядок КАК Порядок "
+        "ИЗ Справочник.Контрагенты КАК К\");\nТЗ = З.Выполнить().Выгрузить();\nР = Новый Массив;\n";
+    const std::string loop = "Для Н = 1 По 100 Цикл Р.Добавить(ТЗ.НайтиСтроки(Новый Структура(\"%K%\", Строка(Н))).Количество()); "
+                             "КонецЦикла;\nРезультат = Р;\n";
+    for (const char* key : {"Наим", "Инн"}) {
+        std::string code = table + loop;
+        code.replace(code.find("%K%"), 3, key);
+        const Json j = C(code);
+        CHECK_EQ(V(j), std::string("confirm"));
+        CHECK(Oracles(j).count(EqOracle(std::string(key) == "Инн" ? kInnField : kNameField)) == 1);
+    }
+    // a literal filter value, or a computed value over an open column, is fine
+    CHECK_EQ(V(C(table + "Результат = ТЗ.НайтиСтроки(Новый Структура(\"Инн\", \"7700000000\")).Количество();")),
+             std::string("safe"));
+    CHECK_EQ(V(C(table + "Для Н = 1 По 5 Цикл Р.Добавить(ТЗ.НайтиСтроки(Новый Структура(\"Порядок\", Н)).Количество()); "
+                         "КонецЦикла;\nРезультат = Р;")), std::string("safe"));
 }

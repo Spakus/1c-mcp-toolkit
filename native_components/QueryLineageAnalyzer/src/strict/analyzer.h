@@ -52,7 +52,7 @@
 
 namespace lineage::strict {
 
-// `op` and `field` mark an oracle reason: the primitive ("like" | "range" | "strfunc") and the policy
+// `op` and `field` mark an oracle reason: the primitive ("like" | "range" | "strfunc" | "eq"; "eq": equality with a value the code computed) and the policy
 // field (FieldInfo::display) whose content it probes; `field` is empty when the content cannot be attributed to a
 // field (a token, a presentation, a subquery value).
 struct Reason {

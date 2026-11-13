@@ -9,8 +9,10 @@
 //
 // Verdict: risks (R_*) are shown but no longer decide. "deny": the code mentions an effect the host's
 // runtime sandbox does not cover (policy "deny_effects", FieldPolicy::DenyEffects; reason C_EFFECT_DENIED); it is
-// never confirmed and beats every other verdict. "op" ("like" | "range" | "strfunc") and "field" ("<Table>.<Field>" as
-// in the policy) mark an oracle reason: a partial comparison or a string function over protected data; "field" is
+// never confirmed and beats every other verdict. "op" ("like" | "range" | "strfunc" | "eq") and "field" ("<Table>.<Field>" as
+// in the policy) mark an oracle reason: a partial comparison or a string function over protected data; "eq": a value
+// the code computed (a loop counter, a concatenation, a function result) compared for equality with a protected field,
+// as a query parameter, a НайтиПоКоду argument or a НайтиСтроки filter value. "field" is
 // absent when the content cannot be attributed. On the code path the fields are those of every protected column of
 // the queries the code runs (a superset). "safe" only when there is no reason, no missing table and the canonical text
 // printed (the old rule, with the risks, is gone); "incomplete"

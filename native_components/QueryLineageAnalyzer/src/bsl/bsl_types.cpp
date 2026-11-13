@@ -115,6 +115,9 @@ struct VType {
     // The exact string when the value is a client literal or a concatenation of such literals on every path that
     // reaches here (straight-line folding of query texts, C_DYNAMIC_QUERY); empty otherwise.
     std::optional<std::string> text;
+    // A literal of another scalar kind (a number, a date, a Boolean, Неопределено, Null) on every path that reaches
+    // here. Together with `text` it tells a constant the code wrote from a computed value.
+    bool lit = false;
 };
 
 constexpr size_t kMaxFoldedText = 1024 * 1024;   // a longer folded text is dropped (Т = Т + Т doubles per line)
@@ -127,7 +130,7 @@ bool SameColumns(const std::shared_ptr<const ColumnSet>& a, const std::shared_pt
 bool SameVType(const VType& a, const VType& b) {
     return a.ty == b.ty && a.maybe_unassigned == b.maybe_unassigned && a.site == b.site &&
            SameColumns(a.columns, b.columns) && a.label == b.label && a.objs == b.objs && a.refs == b.refs &&
-           a.ref_unknown == b.ref_unknown && a.cell == b.cell && a.text == b.text;
+           a.ref_unknown == b.ref_unknown && a.cell == b.cell && a.text == b.text && a.lit == b.lit;
 }
 
 VType Typed(Ty ty, Origin label) {
@@ -183,6 +186,7 @@ VType JoinType(const VType& a, const VType& b) {
     if (a.ty == Ty::Query && a.site != b.site) return r;
     r.ty = a.ty;
     r.site = a.site;
+    r.lit = a.lit && b.lit;
     if (a.text && b.text && *a.text == *b.text) r.text = a.text;   // the same constant on both paths
     if (SameColumns(a.columns, b.columns)) r.columns = a.columns;
     return r;
@@ -614,6 +618,7 @@ private:
                 slot = &f.slot;
             }
             NoteSlot(*slot, value);
+            if (value.objs.empty() && !(value.text.has_value() || value.lit)) ol.computed = true;
             JoinInto(ol.content, label);
             if (IsTainted(pc_)) JoinInto(ol.shape, pc_);
             if (MayBeRef(value)) {
@@ -704,16 +709,45 @@ private:
         }
     }
 
+    static VType Literal(Ty ty) {
+        VType v = Typed(ty, Origin::Client);
+        v.lit = true;
+        return v;
+    }
+
+    // Constant text or another literal the code wrote (a fold of literals included), as opposed to a value computed
+    // from a loop counter, a concatenation with one, a function result or data. A collection is constant when every
+    // value ever stored in it (nested collections included) is.
+    bool ValueConstant(const VType& v) const {
+        if (IsTainted(v.label)) return false;
+        if (v.objs.empty()) return !IsCollection(v.ty) && (v.text.has_value() || v.lit);
+        std::set<const Expr*> visited;
+        for (const Expr* o : v.objs) {
+            if (!ObjConstant(o, visited)) return false;
+        }
+        return true;
+    }
+
+    bool ObjConstant(const Expr* site, std::set<const Expr*>& visited) const {
+        if (!visited.insert(site).second) return true;
+        const ObjectLabels* ol = FindObj(site);
+        if (!ol || ol->computed || (ol->shape && IsTainted(*ol->shape))) return false;
+        for (const Expr* n : ol->nested) {
+            if (!ObjConstant(n, visited)) return false;
+        }
+        return true;
+    }
+
     VType EvalLit(const Expr& e) {
         switch (e.lit) {
-            case Expr::L::Number: return Typed(Ty::Number, Origin::Client);
+            case Expr::L::Number: return Literal(Ty::Number);
             case Expr::L::String: return EvalString(e);
-            case Expr::L::Date: return Typed(Ty::Date, Origin::Client);
+            case Expr::L::Date: return Literal(Ty::Date);
             case Expr::L::True:
-            case Expr::L::False: return Typed(Ty::Boolean, Origin::Client);
-            case Expr::L::Undefined: return Typed(Ty::Undefined, Origin::Client);
-            case Expr::L::Null: return Typed(Ty::Null, Origin::Client);
-            case Expr::L::Omitted: return Typed(Ty::Undefined, Origin::Client);
+            case Expr::L::False: return Literal(Ty::Boolean);
+            case Expr::L::Undefined: return Literal(Ty::Undefined);
+            case Expr::L::Null: return Literal(Ty::Null);
+            case Expr::L::Omitted: return Literal(Ty::Undefined);
             default: return VType();
         }
     }
@@ -1026,6 +1060,8 @@ private:
                 CheckOp(e.pos, *input);
                 v.label = Transform(*input);
             }
+            v.lit = true;   // an identifier of constant text is as constant as the text
+            for (const VType& a : args) v.lit = v.lit && ValueConstant(a);
             return v;
         }
         v.objs.insert(&e);
@@ -1160,6 +1196,7 @@ private:
                     // The rows found keep the labels of the table.
                     const Origin filter = ValueLabel(args[0]);
                     CheckOp(e.pos, filter);
+                    if (!ValueConstant(args[0])) CheckComputedFilter(recv, args[0], e.pos);
                     const Origin table = ValueLabel(recv);
                     return ArrayResult(e, JoinOrigin(IsTainted(filter) ? Transform(filter) : Origin::Open,
                                                      IsTainted(table) ? table : Origin::Open));
@@ -1191,6 +1228,9 @@ private:
                 if (rule.receiver == Ty::Manager) {
                     v.refs = recv.refs;
                     v.ref_unknown = false;
+                    if (m == AllowlistKey("НайтиПоКоду") && !args.empty() && !ValueConstant(args[0])) {
+                        CheckComputedCode(recv, e.pos);
+                    }
                 }
                 return v;
             }
@@ -1230,17 +1270,82 @@ private:
             return;
         }
         const Origin label = WithPc(ValueLabel(value));
+        const bool computed = !ValueConstant(value);
         auto& params = state_.params[query.site];
         const std::string key = AllowlistKey(name_expr.text);
         const auto it = params.find(key);
         if (it == params.end()) {
             ParamBinding b;
             b.label = label;
+            b.computed = computed;
             b.spellings.insert(name_expr.text);
             params.emplace(key, std::move(b));
         } else {
             it->second.label = JoinOrigin(it->second.label, label);
+            it->second.computed = it->second.computed || computed;
             it->second.spellings.insert(name_expr.text);
+        }
+    }
+
+    // The effect of an equality oracle on `label` (a protected field, or Unknown when it cannot be attributed): a
+    // reason with op "eq" unless the host allows comparing every protected source of the code.
+    void EqOracle(const Pos& pos, Origin label) {
+        if (!OpenableLabel(label)) TaintedOp(pos, label, "eq");
+    }
+
+    // НайтиСтроки with a filter whose values the code computed: the rows found for a guess say whether a protected
+    // column holds it. Only a filter value of the code's own text (a literal) is one guess.
+    void CheckComputedFilter(const VType& table, const VType& filter, const Pos& pos) {
+        std::set<std::string> keys;   // the columns the filter names
+        bool known = !filter.objs.empty();
+        for (const Expr* o : filter.objs) {
+            const ObjectLabels* ol = FindObj(o);
+            if (!ol || ol->kind != Ty::Structure || !ol->elem.Empty()) {
+                known = false;
+                break;
+            }
+            for (const auto& f : ol->fields) keys.insert(f.first);
+        }
+        if (!table.columns) {
+            if (IsTainted(ValueLabel(table))) {
+                NoteUnattributed();
+                EqOracle(pos, Origin::Unknown);
+            }
+            return;
+        }
+        for (const auto& c : table.columns->columns) {
+            if (known && keys.count(c.first) == 0) continue;
+            if (!IsTainted(c.second.origin)) continue;
+            NoteColumn(c.second);
+            EqOracle(pos, c.second.origin);
+        }
+    }
+
+    // Менеджер.НайтиПоКоду(<computed>): an existence oracle on the Код of the manager's table when it is protected.
+    void CheckComputedCode(const VType& manager, const Pos& pos) {
+        const strict::FieldPolicy* policy = options_.policy;
+        if (!policy || manager.refs.empty() || manager.ref_unknown) {
+            NoteUnattributed();
+            EqOracle(pos, Origin::Unknown);
+            return;
+        }
+        for (const std::string& t : manager.refs) {
+            if (!policy->HasTable(t) && policy->ResolveVirtualBase(t).empty()) {
+                result_.missing_tables.insert(t);
+                NoteUnattributed();
+                EqOracle(pos, Origin::Unknown);
+                continue;
+            }
+            const strict::FieldInfo* field = policy->Field(t, "Код");
+            const strict::FieldClass cls = field ? policy->ClassOf(t, "Код") : strict::FieldClass::Unknown;
+            if (cls == strict::FieldClass::Open) continue;
+            if (cls == strict::FieldClass::Protected && !field->display.empty()) {
+                result_.source_fields.insert(field->display);
+                EqOracle(pos, Origin::ProtectedDirect);
+            } else {
+                NoteUnattributed();
+                EqOracle(pos, Origin::Unknown);
+            }
         }
     }
 

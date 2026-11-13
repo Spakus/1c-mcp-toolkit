@@ -48,10 +48,10 @@ std::string AsciiUpper(std::string s) {
     return s;
 }
 
-strict::ParamOrigin ParamOriginOf(Origin label) {
+strict::ParamOrigin ParamOriginOf(Origin label, bool computed) {
     switch (label) {
         case Origin::Open:
-        case Origin::Client: return strict::ParamOrigin::Client;
+        case Origin::Client: return computed ? strict::ParamOrigin::ClientComputed : strict::ParamOrigin::Client;
         case Origin::ProtectedDirect: return strict::ParamOrigin::TokenProtected;
         default: return strict::ParamOrigin::TokenUnknown;
     }
@@ -64,7 +64,7 @@ Params ParamsOf(const LabelState& state, const Expr* site) {
     const auto it = state.params.find(site);
     if (it == state.params.end()) return out;
     for (const auto& kv : it->second) {
-        for (const std::string& spelling : kv.second.spellings) out[spelling] = ParamOriginOf(kv.second.label);
+        for (const std::string& spelling : kv.second.spellings) out[spelling] = ParamOriginOf(kv.second.label, kv.second.computed);
     }
     return out;
 }

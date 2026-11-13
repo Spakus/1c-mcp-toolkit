@@ -30,7 +30,10 @@
 namespace lineage::strict {
 
 enum class FieldClass { Open, Protected, Unknown };
-enum class ParamOrigin { Client, TokenProtected, TokenUnknown, Missing };
+// ClientComputed (code checker only, never parsed from the policy): a client value the code computed (a loop counter,
+// a concatenation, a function result). It is labelled like Client, but it is not a literal of the caller: compared with
+// a protected field it is an equality oracle (a loop enumerates guesses), not a filter.
+enum class ParamOrigin { Client, TokenProtected, TokenUnknown, Missing, ClientComputed };
 
 struct FieldInfo {
     FieldClass cls = FieldClass::Unknown;
