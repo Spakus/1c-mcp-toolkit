@@ -1,5 +1,6 @@
 // kind: code
-// expect: confirm
+// expect: deny
+// reason: C_EFFECT_DENIED
 // reason: C_COMMON_MODULE
 // risk: R_UNKNOWN_EFFECT
 // risk: R_WRITE

@@ -227,12 +227,9 @@ TEST(StrictGate, DeniedEffectsAreDeniedNotConfirmed) {
     CHECK_EQ(V(C("Выполнить(\"ФоновыеЗадания.Выполнить()\");")), std::string("deny"));   // executed text is searched
     CHECK_EQ(V(C("Выполнить(\"Фоновые\" + \"Задания.Выполнить()\");")), std::string("deny"));
     CHECK_EQ(V(C("Результат = \"ФоновыеЗадания\";")), std::string("safe"));            // an ordinary string is just a string
-    // the host's list replaces the default: a prefix, an empty list
+    // the host's list is added to the default (see HostDenyListIsAddedToTheDefaultNeverReplacesIt)
     const Json prefix = Json::array({"Пользовател*"});
     CHECK_EQ(V(C("Результат = Пользователи1;", Policy({}, &prefix))), std::string("deny"));
-    CHECK_EQ(V(C("ФоновыеЗадания.Выполнить(\"Х\");", Policy({}, &prefix))) == "deny", false);
-    const Json none = Json::array();
-    CHECK_EQ(V(C("ФоновыеЗадания.Выполнить(\"Х\");", Policy({}, &none))), std::string("confirm"));
     // a deny list that is not an array of names is a malformed policy
     const Json bad = Json::array({"не имя"});
     CHECK(Has(C("Результат = 1;", Policy({}, &bad)), "C_POLICY_INVALID"));
@@ -471,32 +468,32 @@ bool Rejected(const std::string& entry) {
 }  // namespace
 
 TEST(StrictGate, QualifiedDenyEntryMatchesTheManagerMethodPair) {
-    const std::vector<std::string> save{"ХранилищеОбщихНастроек.Сохранить"};
-    CHECK_EQ(DenyOf(save, "ХранилищеОбщихНастроек.Сохранить(\"а\", \"б\", 1);"), std::string("deny"));
+    const std::vector<std::string> save{"МенеджерНастроек.Сохранить"};
+    CHECK_EQ(DenyOf(save, "МенеджерНастроек.Сохранить(\"а\", \"б\", 1);"), std::string("deny"));
     CHECK(Has(C("ХранилищеОбщихНастроек.Сохранить(\"а\", \"б\", 1);", Policy({}, nullptr)), "C_EFFECT_DENIED"));   // default list: any mention
     // the other method of the same manager is not denied by this entry
     const Json deny = Json(save);
-    const Json load = C("Результат = ХранилищеОбщихНастроек.Загрузить(\"а\", \"б\");", Policy({}, &deny));
+    const Json load = C("Результат = МенеджерНастроек.Загрузить(\"а\", \"б\");", Policy({}, &deny));
     CHECK(V(load) != "deny");
     CHECK(!Has(load, "C_EFFECT_DENIED"));
     // case, yo and spaces around the dot are folded like a plain name
-    CHECK_EQ(DenyOf(save, "хранилищеобщихнастроек . сохранить(1);"), std::string("deny"));
+    CHECK_EQ(DenyOf(save, "менеджернастроек . сохранить(1);"), std::string("deny"));
     CHECK_EQ(DenyOf({"Менеджер.Счёт"}, "Менеджер.Счет(1);"), std::string("deny"));
     // a Latin look-alike letter inside the name is folded
-    CHECK_EQ(DenyOf(save, "ХранилищеОбщиx" "Настроек.Сохранить(1);"), std::string("deny"));
+    CHECK_EQ(DenyOf(save, "МенеджерНастр" "o" "ек.Сохранить(1);"), std::string("deny"));
     // the pair is matched wherever it stands in a chain, and as a property read too
-    CHECK_EQ(DenyOf(save, "Результат = Х.ХранилищеОбщихНастроек.Сохранить;"), std::string("deny"));
+    CHECK_EQ(DenyOf(save, "Результат = Х.МенеджерНастроек.Сохранить;"), std::string("deny"));
     // the English pair
-    CHECK_EQ(DenyOf({"CommonSettingsStorage.Save"}, "CommonSettingsStorage.Save(\"a\", \"b\", 1);"), std::string("deny"));
+    CHECK_EQ(DenyOf({"SettingsManager.Save"}, "SettingsManager.Save(\"a\", \"b\", 1);"), std::string("deny"));
     // a star on the method part is a prefix
-    CHECK_EQ(DenyOf({"ХранилищеОбщихНастроек.Сохран*"}, "ХранилищеОбщихНастроек.Сохранить(1);"), std::string("deny"));
-    CHECK(DenyOf({"ХранилищеОбщихНастроек.Сохран*"}, "ХранилищеОбщихНастроек.Загрузить(1);") != "deny");
+    CHECK_EQ(DenyOf({"МенеджерНастроек.Сохран*"}, "МенеджерНастроек.Сохранить(1);"), std::string("deny"));
+    CHECK(DenyOf({"МенеджерНастроек.Сохран*"}, "МенеджерНастроек.Загрузить(1);") != "deny");
     // the manager alone, or the method alone, is not the pair
-    CHECK(DenyOf(save, "ХранилищеОбщихНастроек = 1; Результат = ХранилищеОбщихНастроек;") != "deny");
+    CHECK(DenyOf(save, "МенеджерНастроек = 1; Результат = МенеджерНастроек;") != "deny");
     CHECK(DenyOf(save, "Сохранить = 1; Результат = Сохранить;") != "deny");
     // an executed string is searched for the pair
-    CHECK_EQ(DenyOf(save, "Выполнить(\"ХранилищеОбщихНастроек.Сохранить(1)\");"), std::string("deny"));
-    CHECK(DenyOf(save, "Выполнить(\"ХранилищеОбщихНастроек.Загрузить(1)\");") != "deny");
+    CHECK_EQ(DenyOf(save, "Выполнить(\"МенеджерНастроек.Сохранить(1)\");"), std::string("deny"));
+    CHECK(DenyOf(save, "Выполнить(\"МенеджерНастроек.Загрузить(1)\");") != "deny");
 }
 
 TEST(StrictGate, QualifiedDenyEntryShapes) {
@@ -739,4 +736,35 @@ TEST(StrictGate, ConstantExecutionTextKeepsItsOwnVerdict) {
     CHECK_EQ(V(C("Результат = Новый(\"Массив\");")), std::string("confirm"));
     CHECK_EQ(V(C("Выполнить(\"Фоновые\" + \"Задания.Выполнить(1)\");")), std::string("deny"));
     CHECK(!Has(C("Выполнить(\"Результат = 1;\");"), "C_EFFECT_DENIED"));
+}
+
+// ---- the default deny list is complete and the host list adds to it ----
+
+TEST(StrictGate, DefaultDenyListNamesEveryUncoveredEffect) {
+    for (const char* name : {"НачатьТранзакцию", "BeginTransaction", "ЗафиксироватьТранзакцию", "CommitTransaction",
+                             "ОтменитьТранзакцию", "RollbackTransaction", "ХранилищеПользовательскихНастроекОтчетов",
+                             "ReportsUserSettingsStorage", "ХранилищеВариантовОтчетов", "ReportsVariantsStorage",
+                             "ХранилищеПользовательскихНастроекДинамическихСписков", "DynamicListsUserSettingsStorage",
+                             "Exit", "Terminate", "SetExclusiveMode", "ЗавершитьРаботуСистемы", "ПрекратитьРаботуСистемы",
+                             "УстановитьПривилегированныйРежим", "SetPrivilegedMode", "УстановитьОтключениеБезопасногоРежима",
+                             "SetSafeModeDisabled", "УстановитьБезопасныйРежим", "SetSafeMode"}) {
+        const Json j = C(std::string("Х = ") + name + "(1);");
+        CHECK_EQ(V(j), std::string("deny"));
+        CHECK(Has(j, "C_EFFECT_DENIED"));
+    }
+    for (const char* storage : {"ХранилищеПользовательскихНастроекОтчетов", "ХранилищеВариантовОтчетов",
+                                "ХранилищеПользовательскихНастроекДинамическихСписков"}) {
+        CHECK_EQ(V(C(std::string(storage) + ".Сохранить(\"а\", \"б\", 1);")), std::string("deny"));
+    }
+}
+
+TEST(StrictGate, HostDenyListIsAddedToTheDefaultNeverReplacesIt) {
+    const Json reserved = Json::array({"common_module_call", "typed_object_write"});
+    CHECK_EQ(V(C("ФоновыеЗадания.Выполнить(\"Х\");", Policy({}, &reserved))), std::string("deny"));
+    const Json prefix = Json::array({"Пользовател*"});
+    CHECK_EQ(V(C("Результат = Пользователи1;", Policy({}, &prefix))), std::string("deny"));
+    CHECK_EQ(V(C("ФоновыеЗадания.Выполнить(\"Х\");", Policy({}, &prefix))), std::string("deny"));
+    const Json none = Json::array();
+    CHECK_EQ(V(C("ФоновыеЗадания.Выполнить(\"Х\");", Policy({}, &none))), std::string("deny"));
+    CHECK_EQ(V(C("Результат = 1;", Policy({}, &none))), std::string("safe"));
 }

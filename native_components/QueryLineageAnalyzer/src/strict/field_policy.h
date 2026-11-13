@@ -71,8 +71,9 @@ public:
     bool CompareAllowed(const std::string& display) const;
 
     // The effect names the host does not cover by the runtime sandbox ("deny_effects" of the policy: exact names, or
-    // a prefix when the pattern ends with '*'): code that mentions one is denied, never confirmed. The key absent:
-    // kDefaultDenyEffects (provisional); an empty array: nothing is denied.
+    // a prefix when the pattern ends with '*'): code that mentions one is denied, never confirmed. The result is
+    // kDefaultDenyEffects (provisional) followed by the host's entries: a host list adds to the default and never
+    // replaces it, whatever it holds (an empty array and a list of reserved tokens only included).
     // An entry is a name, a prefix ("Name*"), or "Manager.Method" (the method part may end with '*'): the pair
     // `Manager . Method` in the code is denied, the manager with another method is not.
     std::vector<std::string> DenyEffects() const;
@@ -118,7 +119,7 @@ private:
     bool deny_typed_object_write_ = false;
 };
 
-// Names of the effects denied when the policy has no "deny_effects" (background work runs in its own session and
+// Names of the effects always denied, with the host's "deny_effects" added (background work runs in its own session and
 // transaction, so the rollback of the sandbox does not reach it). Provisional until the platform check of the safe
 // mode.
 extern const char* const kDefaultDenyEffects[];

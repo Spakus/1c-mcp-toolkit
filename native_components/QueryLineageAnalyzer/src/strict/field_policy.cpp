@@ -342,7 +342,13 @@ const char* const kDefaultDenyEffects[] = {
     "РасширенияКонфигурации", "ConfigurationExtensions", "ХранилищеОбщихНастроек", "CommonSettingsStorage",
     "ХранилищеСистемныхНастроек", "SystemSettingsStorage", "ХранилищеНастроекДанныхФорм", "FormDataSettingsStorage",
     "ДлительныеОперации", "TimeConsumingOperations", "ВнешниеОбработки", "ExternalDataProcessors", "ВнешниеОтчеты",
-    "ExternalReports", "ПодключитьВнешнююОбработку", "ДополнительныеОтчетыИОбработки"};
+    "ExternalReports", "ПодключитьВнешнююОбработку", "ДополнительныеОтчетыИОбработки",
+    "НачатьТранзакцию", "BeginTransaction", "ЗафиксироватьТранзакцию", "CommitTransaction", "ОтменитьТранзакцию",
+    "RollbackTransaction", "ХранилищеПользовательскихНастроекОтчетов", "ReportsUserSettingsStorage",
+    "ХранилищеВариантовОтчетов", "ReportsVariantsStorage", "ХранилищеПользовательскихНастроекДинамическихСписков",
+    "DynamicListsUserSettingsStorage", "Exit", "Terminate", "SetExclusiveMode", "УстановитьПривилегированныйРежим",
+    "SetPrivilegedMode", "УстановитьОтключениеБезопасногоРежима", "SetSafeModeDisabled", "УстановитьБезопасныйРежим",
+    "SetSafeMode"};
 const size_t kDefaultDenyEffectsCount = sizeof(kDefaultDenyEffects) / sizeof(kDefaultDenyEffects[0]);
 
 bool FieldPolicy::CompareAllowed(const std::string& display) const {
@@ -351,8 +357,9 @@ bool FieldPolicy::CompareAllowed(const std::string& display) const {
 }
 
 std::vector<std::string> FieldPolicy::DenyEffects() const {
-    if (has_deny_effects_) return deny_effects_;
-    return std::vector<std::string>(kDefaultDenyEffects, kDefaultDenyEffects + kDefaultDenyEffectsCount);
+    std::vector<std::string> out(kDefaultDenyEffects, kDefaultDenyEffects + kDefaultDenyEffectsCount);
+    out.insert(out.end(), deny_effects_.begin(), deny_effects_.end());   // the host adds to the default, never replaces it
+    return out;
 }
 
 bool FieldPolicy::DeniesReserved(ReservedEffect effect) const {
