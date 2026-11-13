@@ -512,8 +512,10 @@ TEST(StrictGate, QualifiedDenyEntryShapes) {
 
 // The exact list the host builds in ЗапрещенныеДействияСтрогогоРежима (1C object module): every entry must pass the validator,
 // otherwise the whole policy is malformed and every code check answers C_POLICY_INVALID.
-TEST(StrictGate, HostDenyListIsAcceptedByThePolicyValidator) {
-    const Json deny = std::vector<std::string>{
+namespace {
+
+std::vector<std::string> HostDenyList() {
+    return {
     "common_module_call", "typed_object_write", "УстановитьОтключениеБезопасногоРежима", "SetSafeModeDisabled",
     "УстановитьБезопасныйРежим", "SetSafeMode", "УстановитьБезопасныйРежимРазделенияДанных",
     "SetDataSeparationSafeMode", "УстановитьПривилегированныйРежим", "SetPrivilegedMode", "НачатьТранзакцию",
@@ -541,11 +543,27 @@ TEST(StrictGate, HostDenyListIsAcceptedByThePolicyValidator) {
     "ХранилищеНастроекДанныхФорм.Save", "ХранилищеНастроекДанныхФорм.Удалить", "ХранилищеНастроекДанныхФорм.Delete",
     "FormDataSettingsStorage.Сохранить", "FormDataSettingsStorage.Save", "FormDataSettingsStorage.Удалить",
     "FormDataSettingsStorage.Delete"};
+}
+
+}  // namespace
+
+TEST(StrictGate, HostDenyListIsAcceptedByThePolicyValidator) {
+    const Json deny = HostDenyList();
     CHECK(!Has(C("Результат = 1;", Policy({}, &deny)), "C_POLICY_INVALID"));
     CHECK_EQ(DenyOf(deny.get<std::vector<std::string>>(), "Результат = 1;"), std::string("safe"));
     CHECK_EQ(DenyOf(deny.get<std::vector<std::string>>(), "ХранилищеОбщихНастроек.Сохранить(\"а\", \"б\", 1);"),
              std::string("deny"));
     CHECK_EQ(DenyOf(deny.get<std::vector<std::string>>(), "ПодключитьВнешнююОбработку(\"а\");"), std::string("deny"));
+}
+
+TEST(StrictGate, HostPolicyShapeKeepsSelfCallsAndSessionWritesOutOfSafe) {
+    const std::vector<std::string> list = HostDenyList();
+    const std::vector<std::string> unsafe{
+        "ЭтотОбъект.ВыполнитьКомандуНаСервере(\"execute_code\", 1);", "ThisObject.ВыполнитьКомандуНаСервере(1);",
+        "ПараметрыСеанса.Х = 1; Результат = 1;"};
+    for (const std::string& code : unsafe) CHECK(DenyOf(list, code) != "safe");
+    // transactions are named in the list: unbalanced commit then begin (the count is restored) is denied
+    CHECK_EQ(DenyOf(list, "ЗафиксироватьТранзакцию(); НачатьТранзакцию(); Результат = 1;"), std::string("deny"));
 }
 
 TEST(StrictGate, PlainDenyEntryDeniesAnyMentionIncludingALocalVariable) {
