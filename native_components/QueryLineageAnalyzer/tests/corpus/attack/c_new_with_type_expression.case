@@ -1,6 +1,7 @@
 // kind: code
-// expect: confirm
+// expect: deny
 // reason: C_DYNAMIC_NEW
+// reason: C_EFFECT_DENIED
 // risk: R_UNKNOWN_EFFECT
 // risk: R_PROTECTION
 // class: 12

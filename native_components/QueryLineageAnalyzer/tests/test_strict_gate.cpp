@@ -710,3 +710,33 @@ TEST(StrictGate, AutoorderByReferenceWithProtectedPresentationAsksSelectedOrNot)
     CHECK_EQ(V(Q("ВЫБРАТЬ Д.Номер КАК Н ИЗ Документ.Реализация КАК Д УПОРЯДОЧИТЬ ПО Д.Номер АВТОУПОРЯДОЧИВАНИЕ")),
              std::string("safe"));
 }
+
+// ---- computed code or type names are denied ----
+
+TEST(StrictGate, ComputedExecutionTextIsDenied) {
+    for (const char* code : {
+             "Выполнить(\"Фон\" + СтрЗаменить(\"ZZ\", \"ZZ\", \"\") + \"овыеЗадания.Выполнить(1)\");",
+             "Выполнить(Символ(1060) + \"оновыеЗадания.Выполнить(1)\");",
+             "Новый(СтрЗаменить(\"ЗаписьХМL\", \"Х\", \"X\"));",
+             "Вычислить(СтрЗаменить(\"Фон_овыеЗадания.Выполнить\", \"_\", \"\"));",
+             "Выполнить(СтрЗаменить(\"ЗафиксироватьТранзакцию_()\", \"_\", \"\"));",
+             "А = \"Фоновые\"; Б = \"Задания\"; Выполнить(А + Б + \".Выполнить(1)\");",
+             "Х = Новый Массив; Результат = 1; Выполнить(Х[0]);"}) {
+        const Json j = C(code);
+        CHECK_EQ(V(j), std::string("deny"));
+        CHECK(Has(j, "C_EFFECT_DENIED"));
+    }
+    // the host's own list does not switch the rule off
+    const Json none = Json::array();
+    CHECK_EQ(V(C("Выполнить(СтрЗаменить(\"а\", \"а\", \"б\"));", Policy({}, &none))), std::string("deny"));
+}
+
+TEST(StrictGate, ConstantExecutionTextKeepsItsOwnVerdict) {
+    // a literal, or literals joined: the text is checked as before (a window, or deny when it names a denied effect)
+    CHECK_EQ(V(C("Выполнить(\"Результат = 1;\");")), std::string("confirm"));
+    CHECK_EQ(V(C("Выполнить(\"Результат = \" + \"1;\");")), std::string("confirm"));
+    CHECK_EQ(V(C("Вычислить(\"1 + 1\");")), std::string("confirm"));
+    CHECK_EQ(V(C("Результат = Новый(\"Массив\");")), std::string("confirm"));
+    CHECK_EQ(V(C("Выполнить(\"Фоновые\" + \"Задания.Выполнить(1)\");")), std::string("deny"));
+    CHECK(!Has(C("Выполнить(\"Результат = 1;\");"), "C_EFFECT_DENIED"));
+}

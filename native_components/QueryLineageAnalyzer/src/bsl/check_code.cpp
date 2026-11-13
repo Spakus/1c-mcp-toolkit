@@ -270,6 +270,7 @@ Outcome CheckWithDeny(const std::string& code, const std::string& policy_json) {
         if (r.code == "C_EVAL" || r.code == "C_DYNAMIC_NEW") refusal = r.code;
     }
     std::vector<CodeReason> denied = ScanDeniedEffects(code, policy.policy.DenyEffects(), refusal);
+    for (const CodeReason& r : ScanComputedExecution(code)) denied.push_back(r);   // any effect may run: always denied
     // The reserved tokens: a module call is no longer a window, a write on a value that is not a known type is denied.
     if (policy.policy.DeniesReserved(strict::ReservedEffect::CommonModuleCall) && !o.module_call_sites.empty()) {
         for (const Pos& pos : o.module_call_sites) denied.push_back(CodeReason{"C_EFFECT_DENIED", pos});

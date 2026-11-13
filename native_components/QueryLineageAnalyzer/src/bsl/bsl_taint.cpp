@@ -777,6 +777,76 @@ std::vector<CodeReason> ScanDeniedEffects(const std::string& utf8, const std::ve
     return out;
 }
 
+namespace {
+
+bool IsEvalIdentifier(const Token& t) {
+    if (t.kind != Bt::Identifier) return false;
+    const std::string key = NormalizeIdentifierKey(t.text);
+    return key == NormalizeIdentifierKey("Вычислить") || key == "EVAL";
+}
+
+// The tokens between the parenthesis at `open` and its partner, or up to the first comma at depth 0 when
+// `first_only`; false when there is no partner.
+bool ArgumentTokens(const std::vector<Token>& tokens, size_t open, bool first_only, size_t& from, size_t& to) {
+    int depth = 0;
+    from = open + 1;
+    for (size_t i = open; i < tokens.size(); ++i) {
+        const Bt kind = tokens[i].kind;
+        if (kind == Bt::LParen) {
+            ++depth;
+        } else if (kind == Bt::RParen) {
+            if (--depth == 0) {
+                to = i;
+                return true;
+            }
+        } else if (kind == Bt::Comma && depth == 1 && first_only) {
+            to = i;
+            return true;
+        } else if (kind == Bt::End) {
+            return false;
+        }
+    }
+    return false;
+}
+
+// String literals joined with '+', parentheses allowed: a text the code wrote.
+bool ConstantText(const std::vector<Token>& tokens, size_t from, size_t to) {
+    bool text = false;
+    for (size_t i = from; i < to; ++i) {
+        const Token& t = tokens[i];
+        if (t.kind == Bt::String) text = true;
+        else if (t.kind != Bt::LParen && t.kind != Bt::RParen && !(t.kind == Bt::Op && t.text == "+")) return false;
+    }
+    return text;
+}
+
+}  // namespace
+
+std::vector<CodeReason> ScanComputedExecution(const std::string& utf8) {
+    std::vector<CodeReason> out;
+    try {
+        const std::vector<Token> tokens = Tokenize(utf8);
+        for (size_t i = 0; i < tokens.size() && out.size() < kMaxRisksPerClass; ++i) {
+            const Token& t = tokens[i];
+            // After a dot Выполнить is a method (Запрос.Выполнить()), not the statement.
+            const bool member = i > 0 && tokens[i - 1].kind == Bt::Dot;
+            const bool execute = t.kind == Bt::Keyword && t.kw == Bk::Execute && !member;
+            const bool eval = IsEvalIdentifier(t);
+            const bool dynamic_new = t.kind == Bt::Keyword && t.kw == Bk::New && i + 1 < tokens.size() &&
+                                     tokens[i + 1].kind == Bt::LParen;
+            if (!execute && !eval && !dynamic_new) continue;
+            size_t from = 0, to = 0;
+            const bool called = i + 1 < tokens.size() && tokens[i + 1].kind == Bt::LParen;
+            if (called && ArgumentTokens(tokens, i + 1, dynamic_new, from, to) && ConstantText(tokens, from, to)) continue;
+            if (eval && !called) continue;   // a variable named Вычислить: the parser refuses it as C_EVAL
+            out.push_back(CodeReason{"C_EFFECT_DENIED", Pos{t.pos, t.line, t.col}});
+        }
+    } catch (...) {
+        out.assign(1, CodeReason{"C_EFFECT_DENIED", Pos{}});   // unreadable text: fail closed
+    }
+    return out;
+}
+
 std::vector<CodeReason> RefusedCodeRisks(const std::string& utf8, const std::string& parse_error_code) {
     std::vector<CodeReason> out = ScanRisksInSource(utf8);
     std::vector<CodeReason> more{CodeReason{"R_UNKNOWN_EFFECT", Pos{}}};   // no tree: nothing is known about the code

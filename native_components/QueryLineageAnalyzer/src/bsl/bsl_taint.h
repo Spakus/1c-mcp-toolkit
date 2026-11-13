@@ -76,6 +76,13 @@ void MergeRisks(std::vector<CodeReason>& into, const std::vector<CodeReason>& mo
 std::vector<CodeReason> ScanDeniedEffects(const std::string& utf8, const std::vector<std::string>& patterns,
                                           const std::string& parse_error_code);
 
+// A text the code executes that is not constant: Выполнить(<expr>), Вычислить(<expr>) or Новый(<expr>, ...) whose
+// argument is anything but string literals joined with '+'. Such code can run any effect, the deny list included, so
+// it is denied: one C_EFFECT_DENIED reason per call, whatever the policy's "deny_effects" lists. A constant argument is
+// not reported here: its text is searched like any executed text (ScanDeniedEffects). Token-level: it also reads
+// code the parser refused. Never throws.
+std::vector<CodeReason> ScanComputedExecution(const std::string& utf8);
+
 // R_UNKNOWN_EFFECT (BSL side: protection class): a call the allowlist does not know (module function, unknown global,
 // method on an Unknown receiver or not allowed on a known type, unknown "Новый" type) can do anything, writes included.
 // Property reads without a call stay a reason only.
