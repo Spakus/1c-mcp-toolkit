@@ -117,6 +117,17 @@ TEST(StrictGate, OrderingByReferencePasses) {
               "Q_ORDER_PROTECTED"));
 }
 
+TEST(StrictGate, EmptinessThroughCastToString) {
+    const std::string head = "ВЫБРАТЬ ВЫБОР КОГДА ";
+    const std::string tail = " ТОГДА 0 ИНАЧЕ 1 КОНЕЦ КАК Ф ИЗ РегистрСведений.Правила КАК П";
+    CHECK_EQ(V(Q(head + "ВЫРАЗИТЬ(П.Текст КАК СТРОКА(100)) = \"\"" + tail)), std::string("safe"));
+    CHECK_EQ(V(Q(head + "ВЫРАЗИТЬ(П.Текст КАК СТРОКА) <> \"\"" + tail)), std::string("safe"));
+    // a piece of the value cast to a string is not an emptiness test
+    CHECK_EQ(V(Q(head + "ВЫРАЗИТЬ(ПОДСТРОКА(П.Текст, 2, 1) КАК СТРОКА(100)) = \"\"" + tail)), std::string("confirm"));
+    // a cast to a number is not one either
+    CHECK_EQ(V(Q(head + "ВЫРАЗИТЬ(П.Текст КАК ЧИСЛО(10)) = 0" + tail)), std::string("confirm"));
+}
+
 TEST(StrictGate, KeywordAliasesStayRefused) {
     for (const char* alias : {"Есть", "И", "Истина"}) {
         CHECK(Has(Q(std::string("ВЫБРАТЬ К.Порядок КАК ") + alias + " ИЗ Справочник.Контрагенты КАК К"), "Q_PARSE_EXPECTED"));

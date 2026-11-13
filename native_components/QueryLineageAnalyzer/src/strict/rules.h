@@ -1,4 +1,5 @@
 #pragma once
+#include <functional>
 #include <map>
 #include <set>
 #include <vector>
@@ -7,6 +8,7 @@
 #include "strict/field_policy.h"
 #include "strict/scope.h"
 #include "strict/strict_ast.h"
+#include "utf_utils.h"
 
 // Rule engine of the strict checker: which operations over protected values need confirmation.
 // It runs after name resolution and labelling, over the labels the analyzer recorded for every expression node.
@@ -29,18 +31,34 @@ struct LabelTable {
     std::set<const Expr*> outer_refs;   // field paths of a subquery that do not resolve in its own sources
 };
 
-// An emptiness test: `<field> = ""` or `<field> <> ""` (either order) where the field path reads a
-// stored protected string directly (label ProtectedDirect). It discloses one bit, filled or not, never the value, so
-// the analyzer labels it Open and the rule engine adds no reason. Anything computed first (ПОДСТРОКА(x, 5, 1) = "",
-// a parameter, a token, a derived value) is not an emptiness test: a substring of a value is a length oracle.
-inline bool IsEmptinessTest(const Expr& e, Origin left, Origin right) {
+// Label of an expression node as the analyzer recorded it (Unknown when it has none).
+using LabelFn = std::function<Origin(const Expr*)>;
+
+// The operand an emptiness test reads: the field itself, or the field under ВЫРАЗИТЬ(<field> КАК СТРОКА[(n)]), the only
+// legal way to test an unlimited-length string in 1C. A cast to a string keeps an empty value empty and a non-empty
+// one non-empty, so it discloses the same bit.
+inline const Expr* EmptinessOperand(const Expr& x) {
+    if (x.kind != Expr::K::Cast || x.args.size() != 1 || !x.args[0]) return &x;
+    const std::string type = NormalizeIdentifierKey(x.type_name);
+    return type == "СТРОКА" || type == "STRING" ? x.args[0].get() : &x;
+}
+
+// An emptiness test: `<field> = ""` or `<field> <> ""` (either order) where the field path reads a stored protected
+// string directly (label ProtectedDirect), bare or under ВЫРАЗИТЬ(... КАК СТРОКА). It discloses one bit, filled or
+// not, never the value, so the analyzer labels it Open and the rule engine adds no reason. Anything computed first
+// (ПОДСТРОКА(x, 5, 1) = "", a parameter, a token, a derived value) is not an emptiness test: a substring of a value is
+// a length oracle.
+inline bool IsEmptinessTest(const Expr& e, const LabelFn& label) {
     if (e.kind != Expr::K::Binary || (e.text != "=" && e.text != "<>") || e.args.size() != 2) return false;
     const Expr* a = e.args[0].get();
     const Expr* b = e.args[1].get();
     if (!a || !b) return false;
     const auto empty = [](const Expr& x) { return x.kind == Expr::K::StringLit && x.text.empty(); };
-    const auto direct = [](const Expr& x, Origin o) { return x.kind == Expr::K::Field && o == Origin::ProtectedDirect; };
-    return (empty(*b) && direct(*a, left)) || (empty(*a) && direct(*b, right));
+    const auto direct = [&label](const Expr& x) {
+        const Expr* field = EmptinessOperand(x);
+        return field->kind == Expr::K::Field && label(field) == Origin::ProtectedDirect;
+    };
+    return (empty(*b) && direct(*a)) || (empty(*a) && direct(*b));
 }
 
 // True when a grouping item is also selected as is (same field path): the group key is then returned as a

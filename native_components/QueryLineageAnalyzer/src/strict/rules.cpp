@@ -62,6 +62,7 @@ private:
     const LabelTable& labels_;
     AnalysisResult& out_;
     std::set<const Select*> statements_;   // the statement-level selects (ИТОГИ is considered only there)
+    std::set<const Expr*> cast_in_emptiness_;   // casts that belong to an emptiness test (no reason of their own)
 
     void Add(const char* code, const Pos& pos) {
         for (const Reason& r : out_.reasons) {
@@ -398,6 +399,13 @@ private:
     }
 
     void Walk(const Expr& e, Ctx ctx, bool item_root) {
+        // ВЫРАЗИТЬ(<field> КАК СТРОКА) under an emptiness test is part of that test, not a function over the field.
+        const LabelFn emptiness_label = [this](const Expr* x) { return LabelOf(x); };
+        if (IsEmptinessTest(e, emptiness_label)) {
+            for (const ExprP& a : e.args) {
+                if (a && a->kind == Expr::K::Cast) cast_in_emptiness_.insert(a.get());
+            }
+        }
         const int period = e.kind == Expr::K::Call ? PeriodArgIndex(e.text) : -1;
         for (size_t i = 0; i < e.args.size(); ++i) {
             const ExprP& a = e.args[i];
@@ -452,7 +460,7 @@ private:
             case Expr::K::Cast:
             case Expr::K::Case:
             case Expr::K::IsNullTest:
-                if (any) Add("Q_FUNC_OVER_PROTECTED", e.pos);
+                if (any && cast_in_emptiness_.count(&e) == 0) Add("Q_FUNC_OVER_PROTECTED", e.pos);
                 break;
             case Expr::K::Unary: UnaryRules(e, ctx, any); break;
             case Expr::K::Binary: BinaryRules(e, ctx, any); break;
@@ -501,13 +509,18 @@ private:
         if (!logical || !IsConditionCtx(ctx)) Add("Q_FUNC_OVER_PROTECTED", e.pos);
     }
 
+    bool IsOpenBitNode(const Expr& e) const {
+        const LabelFn label = [this](const Expr* x) { return LabelOf(x); };
+        return IsEmptinessTest(e, label);
+    }
+
     void BinaryRules(const Expr& e, Ctx ctx, bool any) {
         if (e.args.size() != 2 || !e.args[0] || !e.args[1]) {
             Add("Q_UNKNOWN_EXPR", e.pos);
             return;
         }
         if (!any) return;
-        if (IsEmptinessTest(e, LabelOf(e.args[0].get()), LabelOf(e.args[1].get()))) return;
+        if (IsOpenBitNode(e)) return;
         if (e.text == "=") {
             EqRule(LabelOf(e.args[0].get()), LabelOf(e.args[1].get()), e.args[0].get(), e.args[1].get(), ctx, e.pos);
         } else if (IsComparison(e.text)) {
