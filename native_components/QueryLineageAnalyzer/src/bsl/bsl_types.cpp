@@ -118,6 +118,9 @@ struct VType {
     // A literal of another scalar kind (a number, a date, a Boolean, Неопределено, Null) on every path that reaches
     // here. Together with `text` it tells a constant the code wrote from a computed value.
     bool lit = false;
+    // The value may be a scalar the code computed (a loop counter, a concatenation, a function result) although it
+    // also carries collections (`objs`): a join of such a scalar with a collection. Set by JoinType.
+    bool scalar_computed = false;
 };
 
 constexpr size_t kMaxFoldedText = 1024 * 1024;   // a longer folded text is dropped (Т = Т + Т doubles per line)
@@ -130,7 +133,8 @@ bool SameColumns(const std::shared_ptr<const ColumnSet>& a, const std::shared_pt
 bool SameVType(const VType& a, const VType& b) {
     return a.ty == b.ty && a.maybe_unassigned == b.maybe_unassigned && a.site == b.site &&
            SameColumns(a.columns, b.columns) && a.label == b.label && a.objs == b.objs && a.refs == b.refs &&
-           a.ref_unknown == b.ref_unknown && a.cell == b.cell && a.text == b.text && a.lit == b.lit;
+           a.ref_unknown == b.ref_unknown && a.cell == b.cell && a.text == b.text && a.lit == b.lit &&
+           a.scalar_computed == b.scalar_computed;
 }
 
 VType Typed(Ty ty, Origin label) {
@@ -167,6 +171,11 @@ bool ScalarLike(const VType& v) {
     }
 }
 
+// The scalar part of a value is computed: a scalar that is not a literal or a fold, or a join that has one.
+bool ScalarPartComputed(const VType& v) {
+    return v.scalar_computed || (v.objs.empty() && !(v.text.has_value() || v.lit));
+}
+
 // Two values that may reach the same place. Different types, or different Запрос objects, join to Unknown; the
 // labels, collections and reference targets of both sides are kept.
 VType JoinType(const VType& a, const VType& b) {
@@ -179,6 +188,7 @@ VType JoinType(const VType& a, const VType& b) {
     r.refs.insert(b.refs.begin(), b.refs.end());
     r.ref_unknown = a.ref_unknown || b.ref_unknown;
     r.cell = a.cell && b.cell;
+    r.scalar_computed = ScalarPartComputed(a) || ScalarPartComputed(b);
     if (a.ty != b.ty) {
         if (!ScalarLike(a) || !ScalarLike(b)) r.ref_unknown = true;   // an object or a reference may be one of them
         return r;
@@ -587,6 +597,7 @@ private:
             e.refs.insert(ol->refs.begin(), ol->refs.end());
             e.ref_unknown = e.ref_unknown || ol->ref_unknown;
             e.objs.insert(ol->nested.begin(), ol->nested.end());
+            e.scalar_computed = e.scalar_computed || ol->computed;
         }
         if (coll.objs.empty()) {
             acc = Origin::Unknown;
@@ -618,7 +629,7 @@ private:
                 slot = &f.slot;
             }
             NoteSlot(*slot, value);
-            if (value.objs.empty() && !(value.text.has_value() || value.lit)) ol.computed = true;
+            if (ScalarPartComputed(value)) ol.computed = true;
             JoinInto(ol.content, label);
             if (IsTainted(pc_)) JoinInto(ol.shape, pc_);
             if (MayBeRef(value)) {
@@ -721,6 +732,7 @@ private:
     bool ValueConstant(const VType& v) const {
         if (IsTainted(v.label)) return false;
         if (v.objs.empty()) return !IsCollection(v.ty) && (v.text.has_value() || v.lit);
+        if (v.scalar_computed) return false;
         std::set<const Expr*> visited;
         for (const Expr* o : v.objs) {
             if (!ObjConstant(o, visited)) return false;
@@ -1223,14 +1235,17 @@ private:
                 // Structure lookups by name / UUID: only the arguments can carry data.
                 std::optional<Origin> input;
                 for (const VType& a : args) JoinInto(input, ReadAsValue(a));
+                // First: the reason of a computed code is the "eq" oracle, whatever else its type leaves open (a
+                // protected argument keeps its own reason).
+                if (rule.receiver == Ty::Manager && m == AllowlistKey("НайтиПоКоду") && !args.empty() &&
+                    !IsTainted(ValueLabel(args[0])) && !ValueConstant(args[0])) {
+                    CheckComputedCode(recv, e.pos);
+                }
                 if (input) CheckOp(e.pos, *input);
                 VType v = Typed(rule.result, input ? Transform(*input) : Origin::Open);
                 if (rule.receiver == Ty::Manager) {
                     v.refs = recv.refs;
                     v.ref_unknown = false;
-                    if (m == AllowlistKey("НайтиПоКоду") && !args.empty() && !ValueConstant(args[0])) {
-                        CheckComputedCode(recv, e.pos);
-                    }
                 }
                 return v;
             }

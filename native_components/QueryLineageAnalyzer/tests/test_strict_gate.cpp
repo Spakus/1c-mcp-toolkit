@@ -807,3 +807,29 @@ TEST(StrictGate, StringFunctionOverReferenceTakesThePresentationLabel) {
     CHECK_EQ(V(Q("ВЫБРАТЬ ДЛИНАСТРОКИ(Г.Наименование) КАК Д ИЗ Справочник.Группы КАК Г")), std::string("safe"));
     CHECK_EQ(V(Q("ВЫБРАТЬ ПОДСТРОКА(Г.Наименование, 1, 2) КАК Д ИЗ Справочник.Группы КАК Г")), std::string("safe"));
 }
+
+// ---- a computed scalar is computed even when its variable may also hold a collection ----
+
+TEST(StrictGate, ComputedScalarJoinedWithACollectionStaysComputed) {
+    const std::string head =
+        "З = Новый Запрос(\"ВЫБРАТЬ К.Ссылка ИЗ Справочник.Контрагенты КАК К ГДЕ К.Наименование = &П\");\n";
+    const std::string tail = "З.УстановитьПараметр(\"П\", П);\nР = З.Выполнить().Выгрузить();\nКонецЦикла;\nРезультат = 1;\n";
+    for (const char* collection : {"Новый Массив", "Новый Структура"}) {
+        const Json j = C(head + "Для Сч = 1 По 100 Цикл\nП = Строка(Сч);\nЕсли Сч > 1000 Тогда П = " + collection +
+                         "; КонецЕсли;\n" + tail);
+        CHECK_EQ(V(j), std::string("confirm"));
+        CHECK(Oracles(j).count(std::string("Q_EQ_CLIENT_PARAM/eq@") + kNameField) == 1);
+    }
+    const Json branches = C(head + "Для Сч = 1 По 100 Цикл\nЕсли Сч > 5 Тогда\nП = Новый Массив;\nП.Добавить(\"а\");\n"
+                                   "Иначе\nП = Строка(Сч);\nКонецЕсли;\n" + tail);
+    CHECK_EQ(V(branches), std::string("confirm"));
+    CHECK(Oracles(branches).count(std::string("Q_EQ_CLIENT_PARAM/eq@") + kNameField) == 1);
+    // НайтиПоКоду over such a variable
+    const Json find = C("Для Сч = 1 По 100 Цикл\nК = Строка(Сч);\nЕсли Сч > 1000 Тогда К = Новый Массив; КонецЕсли;\n"
+                        "Р = Справочники.Контрагенты.НайтиПоКоду(К);\nКонецЦикла;\nРезультат = 1;\n");
+    CHECK_EQ(V(find), std::string("confirm"));
+    CHECK(Oracles(find).count("C_FUNC_OVER_PROTECTED/eq@Справочник.Контрагенты.Код") == 1);
+    // a literal scalar joined with a collection of literals is constant
+    CHECK_EQ(V(C(head + "Для Сч = 1 По 3 Цикл\nП = \"а\";\nЕсли Сч > 1 Тогда П = Новый Массив; П.Добавить(\"б\"); КонецЕсли;\n" +
+                 tail)), std::string("safe"));
+}
