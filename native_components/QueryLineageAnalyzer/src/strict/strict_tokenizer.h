@@ -1,6 +1,7 @@
 #pragma once
 #include <cstddef>
 #include <cstdint>
+#include <set>
 #include <string>
 #include <vector>
 
@@ -40,5 +41,10 @@ const char* CanonicalKeyword(Kw kw);   // Russian canonical spelling, used by th
 // character (ASCII letter, '_', Russian Cyrillic letter U+0410-U+044F, U+0401, U+0451), then start characters or ASCII digits.
 // Empty names, spaces, invisible characters and look-alikes from other scripts are false.
 bool IsIdentifierName(const std::string& name);
+
+// Mixed-script names a query text defines itself: an alias after КАК, a temporary table after ПОМЕСТИТЬ (normalized
+// keys, NormalizeIdentifierKey). Valid 1C; the other mixed names stay refused (mixed_script.h): a name the text
+// defines cannot stand for a platform or configuration object, a look-alike of one is not equal to it.
+std::set<std::string> LocalMixedAliases(const std::string& query_utf8);
 
 }  // namespace lineage::strict

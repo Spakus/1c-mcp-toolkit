@@ -418,7 +418,12 @@ private:
         if (Accept(Bt::RParen)) return args;
         for (;;) {
             if (args.size() >= kMaxCallArgs) Error("C_LIMIT", "too many arguments");
-            args.push_back(Expression());
+            // An empty position (`Ф(а, , б)`, `Ф(а,)`) is valid 1C: the parameter takes its default.
+            if (Peek().kind == Bt::Comma || Peek().kind == Bt::RParen) {
+                args.push_back(Literal(Expr::L::Omitted, Here(), ""));
+            } else {
+                args.push_back(Expression());
+            }
             if (Accept(Bt::Comma)) continue;
             Expect(Bt::RParen);
             return args;
@@ -563,7 +568,7 @@ bool CheckExprNodeImpl(const Expr& e, ParseError& err, bool allow_reserved) {
                            Bad(err, "C_INTERNAL", "invalid date");
                 case Expr::L::String:
                     return e.text.find('\0') == std::string::npos || Bad(err, "C_INTERNAL", "invalid string");
-                case Expr::L::True: case Expr::L::False: case Expr::L::Undefined: case Expr::L::Null:
+                case Expr::L::True: case Expr::L::False: case Expr::L::Undefined: case Expr::L::Null: case Expr::L::Omitted:
                     return e.text.empty() || Bad(err, "C_INTERNAL", kInvalid);
                 case Expr::L::None: break;
             }

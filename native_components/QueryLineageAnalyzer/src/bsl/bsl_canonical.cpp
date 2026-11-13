@@ -266,6 +266,7 @@ private:
             case Expr::L::False: W("Ложь"); return;
             case Expr::L::Undefined: W("Неопределено"); return;
             case Expr::L::Null: W("NULL"); return;
+            case Expr::L::Omitted: return;   // the empty position stays empty: ", ,"
             case Expr::L::None: break;
         }
         throw Refuse{"C_PRINT_NODE", "literal kind"};

@@ -29,6 +29,7 @@ const char* LitName(Expr::L l) {
         case Expr::L::False: return "false";
         case Expr::L::Undefined: return "undef";
         case Expr::L::Null: return "null";
+        case Expr::L::Omitted: return "omitted";
         case Expr::L::None: break;
     }
     return "?lit";

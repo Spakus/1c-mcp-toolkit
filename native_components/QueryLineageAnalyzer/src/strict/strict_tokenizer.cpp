@@ -1,4 +1,5 @@
 #include "strict/strict_tokenizer.h"
+#include "mixed_script.h"
 
 #include <unordered_map>
 
@@ -348,6 +349,23 @@ std::vector<Token> Tokenize(const std::string& s) {
     end.line = line;
     end.col = col;
     out.push_back(std::move(end));
+    return out;
+}
+
+std::set<std::string> LocalMixedAliases(const std::string& query_utf8) {
+    std::set<std::string> out;
+    std::set<std::string> idents;   // every identifier of the text
+    const std::vector<Token> t = Tokenize(query_utf8);
+    for (const Token& tok : t) {
+        if (tok.kind == Tk::Identifier) idents.insert(NormalizeIdentifierKey(tok.text));
+    }
+    for (size_t i = 1; i < t.size(); ++i) {
+        if (t[i].kind != Tk::Identifier || t[i - 1].kind != Tk::Keyword) continue;
+        if (t[i - 1].kw != Kw::As && t[i - 1].kw != Kw::Into) continue;
+        if (HasLatinAndCyrillic(t[i].text) && !LooksLikeAnother(t[i].text, idents)) {
+            out.insert(NormalizeIdentifierKey(t[i].text));
+        }
+    }
     return out;
 }
 

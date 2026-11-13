@@ -122,8 +122,9 @@ TEST(BslParser, Expressions) {
     CHECK(ParseBsl("А = Новый Структура(); Б = Новый Массив(5); В = '20240131' = Дата;").ok);
     CHECK(ParseBsl("А = Б[0].В[Г.Д]; А.Б[1] = NULL; А = Истина; А = Ложь;").ok);
     CHECK(!ParseBsl("А = +1;").ok);
-    CHECK(!ParseBsl("А = Ф(,1);").ok);                      // omitted argument
-    CHECK(!ParseBsl("А = Ф(1,);").ok);
+    CHECK(ParseBsl("А = Ф(,1);").ok);                       // an omitted argument is valid 1C
+    CHECK(ParseBsl("А = Ф(1,);").ok);
+    CHECK(ParseBsl("А = Ф(1, , 2);").ok);
     CHECK(!ParseBsl("А = Ф()();").ok);                      // callee is not a plain name
     CHECK(!ParseBsl("А = Б[0](1);").ok);
     CHECK(!ParseBsl("А = ?(1, 2);").ok);

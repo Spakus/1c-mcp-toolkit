@@ -35,7 +35,8 @@ struct Expr {
         Unary,        // text = "-" | "НЕ"; args[0]
         Binary        // text = + - * / % = <> < > <= >= И ИЛИ; args[0], args[1]
     };
-    enum class L { None, Number, String, Date, True, False, Undefined, Null };
+    // Omitted: an empty position of an argument list, `Ф(а, , б)`: the platform takes the default of the parameter.
+    enum class L { None, Number, String, Date, True, False, Undefined, Null, Omitted };
 
     K kind = K::Unset;
     Pos pos;

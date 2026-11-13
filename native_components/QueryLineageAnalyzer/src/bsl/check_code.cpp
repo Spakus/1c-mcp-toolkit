@@ -15,6 +15,7 @@
 #include "utf_utils.h"
 #include "mixed_script.h"
 #include "strict/field_policy.h"
+#include "strict/strict_tokenizer.h"
 
 namespace lineage::bsl {
 
@@ -107,6 +108,42 @@ std::vector<std::string> CodeTableNames(const std::vector<Token>& tokens) {
     return out;
 }
 
+// Mixed-script names the code defines itself (valid 1C; see strict::LocalMixedAliases): a variable that is assigned
+// (`Имя = `), a loop variable (`Для Каждого Имя`, `Для Имя =`), a `Перем Имя`, and the aliases and temporary tables of
+// every string literal read as a query text. A look-alike of a platform or configuration name is not equal to it, so
+// it cannot stand for it; the allowlists still match by the exact name.
+std::set<std::string> LocalMixedNames(const std::vector<Token>& tokens) {
+    std::set<std::string> candidates;
+    std::set<std::string> idents{NormalizeIdentifierKey("Результат")};   // the host's result variable is always there
+    std::set<std::string> from_queries;
+    for (size_t i = 0; i < tokens.size(); ++i) {
+        const Token& t = tokens[i];
+        if (t.kind == Bt::String) {
+            for (const strict::Token& q : strict::Tokenize(t.value)) {
+                if (q.kind == strict::Tk::Identifier) idents.insert(NormalizeIdentifierKey(q.text));
+            }
+            for (const std::string& a : strict::LocalMixedAliases(t.value)) from_queries.insert(a);
+            continue;
+        }
+        if (t.kind != Bt::Identifier && t.kind != Bt::Keyword) continue;
+        idents.insert(NormalizeIdentifierKey(t.text));
+        if (t.kind != Bt::Identifier || !t.mixed_script) continue;
+        const bool after_dot = i > 0 && tokens[i - 1].kind == Bt::Dot;
+        const bool assigned = i + 1 < tokens.size() && tokens[i + 1].kind == Bt::Op && tokens[i + 1].text == "=";
+        const bool declared = i > 0 && tokens[i - 1].kind == Bt::Keyword &&
+                              (tokens[i - 1].kw == Bk::Each || tokens[i - 1].kw == Bk::For || tokens[i - 1].kw == Bk::Var);
+        if (!after_dot && (assigned || declared)) candidates.insert(NormalizeIdentifierKey(t.text));
+    }
+    std::set<std::string> out;
+    for (const std::string& c : candidates) {
+        if (!LooksLikeAnother(c, idents)) out.insert(c);
+    }
+    for (const std::string& a : from_queries) {
+        if (!LooksLikeAnother(a, idents)) out.insert(a);
+    }
+    return out;
+}
+
 bool HasRefusedMixedName(const std::vector<Token>& tokens) {
     for (const Token& t : tokens) {
         if (t.kind == Bt::Identifier && t.mixed_script && IsRefusedMixedScript(t.text)) return true;
@@ -154,7 +191,10 @@ Outcome Check(const std::string& code, const std::string& policy_json) {
     TokenTable tokens;
     if (!policy.ok || !ParseTokenTable(policy_json, tokens)) return Refuse(code, "C_POLICY_INVALID", Pos{});
 
-    const std::set<std::string> mixed = policy.policy.MixedScriptNames();
+    std::set<std::string> mixed = policy.policy.MixedScriptNames();
+    const std::vector<Token> source_tokens = Tokenize(code);
+    const std::set<std::string> local = LocalMixedNames(source_tokens);
+    mixed.insert(local.begin(), local.end());
     const KnownMixedNamesScope scope(&mixed);   // also covers the query texts checked inside AnalyzeCode
 
     const ParseResult parsed = ParseBsl(code);   // the Body lives until the end of this function

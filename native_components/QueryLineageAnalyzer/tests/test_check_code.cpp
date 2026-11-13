@@ -510,7 +510,7 @@ TEST(CheckCode, MixedScriptNamesOfThePolicyPass) {
     CHECK(HasReason(Check("Результат = ПравоДоступа(\"Чтение\", Метаданные.Справочники.TомаS3);", policy), "C_PARSE"));
     CHECK(HasReason(Check("З = Новый Запрос(\"ВЫБРАТЬ КОЛИЧЕСТВО(*) КАК К ИЗ Справочник.TомаS3 КАК Т\");\n"
                           "Результат = 1;", policy), "Q_PARSE_MIXED_SCRIPT"));   // Latin T inside the query text
-    CHECK(HasReason(Check("ТомS3 = 1; Результат = ТомS3;", policy), "C_PARSE"));   // not a policy name
+    CHECK_EQ(Verdict(Check("ТомS3 = 1; Результат = ТомS3;", policy)), std::string("safe"));   // a variable of its own
     // Not in the policy yet: the code names its tables (managers, Метаданные collections, query texts) as missing.
     const Json first = Check("С = Справочники.ТомаS3.ПустаяСсылка();\nРезультат = 1;");
     CHECK_EQ(Verdict(first), std::string("incomplete"));

@@ -695,6 +695,7 @@ private:
             case Expr::L::False: return Typed(Ty::Boolean, Origin::Client);
             case Expr::L::Undefined: return Typed(Ty::Undefined, Origin::Client);
             case Expr::L::Null: return Typed(Ty::Null, Origin::Client);
+            case Expr::L::Omitted: return Typed(Ty::Undefined, Origin::Client);
             default: return VType();
         }
     }

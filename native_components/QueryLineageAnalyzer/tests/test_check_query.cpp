@@ -625,7 +625,8 @@ TEST(CheckQuery, MixedScriptNamesOfThePolicyPass) {
     CHECK_EQ(verdict("ВЫБРАТЬ ТомаS3.Ссылка КАК С ИЗ Справочник.ТомаS3"), std::string("safe"));   // implicit alias
     CHECK_EQ(verdict("ВЫБРАТЬ Т.АдресS3 КАК А ИЗ Справочник.ТомаS3 КАК Т"), std::string("safe"));  // field name
     CHECK(HasCode(Check("ВЫБРАТЬ Т.Ссылка КАК С ИЗ Справочник.TомаS3 КАК Т", policy), "Q_PARSE_MIXED_SCRIPT"));  // Latin T
-    CHECK(HasCode(Check("ВЫБРАТЬ Т.Ссылка КАК СS ИЗ Справочник.ТомаS3 КАК Т", policy), "Q_PARSE_MIXED_SCRIPT"));  // alias
+    // An alias the text defines itself is valid 1C; a look-alike of another name is not (StrictGate).
+    CHECK_EQ(verdict("ВЫБРАТЬ Т.Ссылка КАК СS ИЗ Справочник.ТомаS3 КАК Т"), std::string("safe"));
     // Not in the policy yet: the host builds the policy round by round from missing tables, so the parse failure
     // names the tables of the text; a look-alike of a known table is not asked for again and stays confirm.
     const nlohmann::json first = Check("ВЫБРАТЬ Т.Ссылка КАК С ИЗ Справочник.ТомаS3 КАК Т", kPolicyABJson);

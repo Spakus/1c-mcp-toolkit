@@ -257,6 +257,26 @@ TEST(StrictGate, PureReadFunctionsAreAllowlisted) {
     CHECK_EQ(V(C(kCode + "Результат = Справочники.Контрагенты.НайтиПоКоду(Р.Имя);")), std::string("confirm"));
 }
 
+// ---- F: valid 1C only ----
+
+TEST(StrictGate, OmittedArgumentsRoundTrip) {
+    const Json j = C("Результат = Дата(2020, 1, 1, , , );");
+    CHECK_EQ(V(j), std::string("safe"));
+    CHECK(j["canonical"].get<std::string>().find("Дата(2020, 1, 1, , , )") != std::string::npos);
+}
+
+TEST(StrictGate, MixedScriptNamesTheTextDefinesItself) {
+    CHECK_EQ(V(C("Рq = 1; Результат = Рq;")), std::string("safe"));
+    CHECK_EQ(V(Q("ВЫБРАТЬ К.Порядок КАК RMQЖивых ИЗ Справочник.Контрагенты КАК К")), std::string("safe"));
+    // a name the text does not define stays refused
+    CHECK(Has(C("Результат = Рq;"), "C_PARSE"));
+    CHECK(Has(Q("ВЫБРАТЬ Кoнтрагенты.Порядок КАК Х ИЗ Справочник.Контрагенты КАК К"), "Q_PARSE_MIXED_SCRIPT"));
+    // a look-alike of another name of the same text stays refused: Latin "e" in the first Результат
+    CHECK(Has(C("Рeзультат = 1; Результат = 2;"), "C_PARSE"));
+    CHECK(Has(Q("ВЫБРАТЬ К.Порядок КАК Kонтрагенты ИЗ Справочник.Контрагенты КАК Контрагенты"),
+              "Q_PARSE_MIXED_SCRIPT"));
+}
+
 TEST(StrictGate, KeywordAliasesStayRefused) {
     for (const char* alias : {"Есть", "И", "Истина"}) {
         CHECK(Has(Q(std::string("ВЫБРАТЬ К.Порядок КАК ") + alias + " ИЗ Справочник.Контрагенты КАК К"), "Q_PARSE_EXPECTED"));

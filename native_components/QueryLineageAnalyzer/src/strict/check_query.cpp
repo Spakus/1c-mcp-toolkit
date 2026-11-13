@@ -296,7 +296,9 @@ std::string Check(const std::string& query_utf8, const std::string& policy_json)
     if (!bsl::ParseTokenTable(policy_json, tokens) || !AgreeTokenParams(tokens, policy.policy)) {
         return Reject("Q_POLICY_INVALID", nullptr);
     }
-    const std::set<std::string> mixed = policy.policy.MixedScriptNames();
+    std::set<std::string> mixed = policy.policy.MixedScriptNames();
+    const std::set<std::string> local = LocalMixedAliases(query_utf8);   // aliases the text defines itself
+    mixed.insert(local.begin(), local.end());
     const KnownMixedNamesScope scope(&mixed);
     return ToJson(Analyze(query_utf8, policy.policy, &tokens));
 }
