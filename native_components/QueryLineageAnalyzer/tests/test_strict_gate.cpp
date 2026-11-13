@@ -865,3 +865,13 @@ TEST(StrictGate, QualifiedDenyEntryReadsAModuleNamedByAString) {
     CHECK(V(C("Результат = ПолучитьОбщийМодуль(\"ОбщегоНазначения\").Прочитать(1);", Policy({}, &deny))) != "deny");
     CHECK(V(C("Результат = ПолучитьОбщийМодуль(\"Другой\").ЗаписатьОбъект(1);", Policy({}, &deny))) != "deny");
 }
+
+TEST(StrictGate, SettingsStoragesCollectionAndSecureStorageAreDeniedByDefault) {
+    for (const char* name : {"ХранилищаНастроек", "SettingsStorages", "БезопасноеХранилище", "SecureStorage"}) {
+        const Json j = C(std::string("Результат = ") + name + ".Х;");
+        CHECK_EQ(V(j), std::string("deny"));
+        CHECK(Has(j, "C_EFFECT_DENIED"));
+    }
+    // session parameters are not on the list
+    CHECK(V(C("Результат = ПараметрыСеанса.Х;")) != "deny");
+}

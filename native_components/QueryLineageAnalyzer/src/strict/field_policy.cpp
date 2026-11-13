@@ -348,7 +348,7 @@ const char* const kDefaultDenyEffects[] = {
     "ХранилищеВариантовОтчетов", "ReportsVariantsStorage", "ХранилищеПользовательскихНастроекДинамическихСписков",
     "DynamicListsUserSettingsStorage", "Exit", "Terminate", "SetExclusiveMode", "УстановитьПривилегированныйРежим",
     "SetPrivilegedMode", "УстановитьОтключениеБезопасногоРежима", "SetSafeModeDisabled", "УстановитьБезопасныйРежим",
-    "SetSafeMode"};
+    "SetSafeMode", "ХранилищаНастроек", "SettingsStorages", "БезопасноеХранилище", "SecureStorage"};
 const size_t kDefaultDenyEffectsCount = sizeof(kDefaultDenyEffects) / sizeof(kDefaultDenyEffects[0]);
 
 bool FieldPolicy::CompareAllowed(const std::string& display) const {
