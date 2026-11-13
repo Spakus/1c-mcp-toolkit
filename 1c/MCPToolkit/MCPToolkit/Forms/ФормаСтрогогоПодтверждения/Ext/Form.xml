@@ -63,6 +63,24 @@
 			<ContextMenu name="ПолеРискиКонтекстноеМеню" id="111"/>
 			<ExtendedTooltip name="ПолеРискиРасширеннаяПодсказка" id="112"/>
 		</InputField>
+		<InputField name="ПолеПоляСравнения" id="128">
+			<DataPath>ПоляСравнения</DataPath>
+			<ReadOnly>true</ReadOnly>
+			<Title>
+				<v8:item>
+					<v8:lang>ru</v8:lang>
+					<v8:content>Поля, по которым вызов сравнивает защищенные значения</v8:content>
+				</v8:item>
+			</Title>
+			<TitleLocation>Top</TitleLocation>
+			<Width>70</Width>
+			<AutoMaxWidth>false</AutoMaxWidth>
+			<Height>3</Height>
+			<HorizontalStretch>true</HorizontalStretch>
+			<MultiLine>true</MultiLine>
+			<ContextMenu name="ПолеПоляСравненияКонтекстноеМеню" id="129"/>
+			<ExtendedTooltip name="ПолеПоляСравненияРасширеннаяПодсказка" id="130"/>
+		</InputField>
 		<InputField name="ПолеОбоснование" id="113">
 			<DataPath>Обоснование</DataPath>
 			<ReadOnly>true</ReadOnly>
@@ -124,6 +142,18 @@
 					<CommandName>Form.Command.Подтвердить</CommandName>
 					<TextColor>web:Green</TextColor>
 					<ExtendedTooltip name="КнопкаПодтвердитьРасширеннаяПодсказка" id="125"/>
+				</Button>
+				<Button name="КнопкаЗапомнитьПоля" id="131">
+					<Type>UsualButton</Type>
+					<CommandName>Form.Command.ЗапомнитьПоля</CommandName>
+					<ExtendedTooltip name="КнопкаЗапомнитьПоляРасширеннаяПодсказка" id="132">
+						<Title>
+							<v8:item>
+								<v8:lang>ru</v8:lang>
+								<v8:content>Выполнить этот вызов и запомнить для указанных полей: такие сравнения больше не будут вызывать окно. Значения полей в ответе остаются замаскированными. Отозвать можно на странице анонимизации.</v8:content>
+							</v8:item>
+						</Title>
+					</ExtendedTooltip>
 				</Button>
 				<Button name="КнопкаОтклонить" id="126">
 					<Type>UsualButton</Type>
@@ -209,6 +239,15 @@
 				</v8:StringQualifiers>
 			</Type>
 		</Attribute>
+		<Attribute name="ПоляСравнения" id="10">
+			<Type>
+				<v8:Type>xs:string</v8:Type>
+				<v8:StringQualifiers>
+					<v8:Length>0</v8:Length>
+					<v8:AllowedLength>Variable</v8:AllowedLength>
+				</v8:StringQualifiers>
+			</Type>
+		</Attribute>
 	</Attributes>
 	<Commands>
 		<Command name="Подтвердить" id="1">
@@ -216,6 +255,15 @@
 		</Command>
 		<Command name="Отклонить" id="2">
 			<Action>Отклонить</Action>
+		</Command>
+		<Command name="ЗапомнитьПоля" id="3">
+			<Title>
+				<v8:item>
+					<v8:lang>ru</v8:lang>
+					<v8:content>Разрешить для этих полей и далее</v8:content>
+				</v8:item>
+			</Title>
+			<Action>ЗапомнитьПоля</Action>
 		</Command>
 	</Commands>
 </Form>
