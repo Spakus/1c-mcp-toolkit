@@ -67,6 +67,15 @@ std::vector<CodeReason> ScanRisksInSource(const std::string& utf8);
 std::vector<CodeReason> RefusedCodeRisks(const std::string& utf8, const std::string& parse_error_code);
 void MergeRisks(std::vector<CodeReason>& into, const std::vector<CodeReason>& more);
 
+// Effects the runtime sandbox does not cover: names the host lists in the policy ("deny_effects",
+// FieldPolicy::DenyEffects: an exact name, or a prefix when the pattern ends with '*'; matched like the risk names:
+// case-insensitive, ё = е, homoglyph-folded). One C_EFFECT_DENIED reason per occurrence in the tokens of the source
+// (a variable, a call, a type, a member). For text that cannot be read as code (the tokenizer refuses part of it) and
+// for C_EVAL / C_DYNAMIC_NEW refusals (a string that is executed) the whole normalised text is searched with word
+// boundaries, strings included. Never throws; an unreadable text is one reason at 1:1.
+std::vector<CodeReason> ScanDeniedEffects(const std::string& utf8, const std::vector<std::string>& patterns,
+                                          const std::string& parse_error_code);
+
 // R_UNKNOWN_EFFECT (BSL side: protection class): a call the allowlist does not know (module function, unknown global,
 // method on an Unknown receiver or not allowed on a known type, unknown "Новый" type) can do anything, writes included.
 // Property reads without a call stay a reason only.

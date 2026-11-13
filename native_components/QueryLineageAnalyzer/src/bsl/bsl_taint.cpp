@@ -520,11 +520,11 @@ CodeAnalysis Drive(const Body& body, const strict::FieldPolicy& policy, const To
             result.risks.push_back(CodeReason{"R_UNKNOWN_EFFECT", r.pos});
         }
     }
-    // R_UNKNOWN_EFFECT comes from the walk, the other risks from the names; any risk forces Confirm.
+    // R_UNKNOWN_EFFECT comes from the walk, the other risks from the names. They are shown to the operator but no
+    // longer decide the verdict: the runtime sandbox rolls writes back; what it does not cover is
+    // ScanDeniedEffects.
     MergeRisks(result.risks, ScanBodyRisks(body));
-    result.verdict = result.reasons.empty() && result.missing_tables.empty() && result.risks.empty()
-                         ? CodeVerdict::Safe
-                         : CodeVerdict::Confirm;
+    result.verdict = result.reasons.empty() && result.missing_tables.empty() ? CodeVerdict::Safe : CodeVerdict::Confirm;
     return result;
 }
 
@@ -634,6 +634,89 @@ std::vector<CodeReason> ScanRisksInSource(const std::string& utf8) {
     }
     std::vector<CodeReason> out;
     MergeRisks(out, raw);
+    return out;
+}
+
+namespace {
+
+struct DenyPattern {
+    std::string key;
+    bool prefix = false;
+};
+
+std::vector<DenyPattern> CompileDeny(const std::vector<std::string>& patterns) {
+    std::vector<DenyPattern> out;
+    for (std::string p : patterns) {
+        DenyPattern d;
+        if (!p.empty() && p.back() == '*') {
+            d.prefix = true;
+            p.pop_back();
+        }
+        d.key = AllowlistKey(p);
+        if (!d.key.empty()) out.push_back(std::move(d));
+    }
+    return out;
+}
+
+bool DenyMatchesKey(const std::vector<DenyPattern>& deny, const std::string& key) {
+    for (const DenyPattern& d : deny) {
+        if (d.prefix ? key.compare(0, d.key.size(), d.key) == 0 : key == d.key) return true;
+    }
+    return false;
+}
+
+bool DenyMatchesName(const std::vector<DenyPattern>& deny, const std::string& name, bool mixed) {
+    const std::string key = AllowlistKey(name);
+    if (DenyMatchesKey(deny, key)) return true;
+    if (!mixed && !NeedsFold(key)) return false;
+    return DenyMatchesKey(deny, AllowlistKey(FoldHomoglyphs(key, true))) ||
+           DenyMatchesKey(deny, AllowlistKey(FoldHomoglyphs(key, false)));
+}
+
+bool DenyInRawKey(const std::vector<DenyPattern>& deny, const std::string& text) {
+    for (const DenyPattern& d : deny) {
+        for (size_t p = text.find(d.key); p != std::string::npos; p = text.find(d.key, p + 1)) {
+            const bool left = p == 0 || !IsIdentByte(static_cast<unsigned char>(text[p - 1]));
+            const size_t end = p + d.key.size();
+            const bool right = end >= text.size() || !IsIdentByte(static_cast<unsigned char>(text[end]));
+            if (left && (d.prefix || right)) return true;
+        }
+    }
+    return false;
+}
+
+bool DenyInRawText(const std::vector<DenyPattern>& deny, const std::string& utf8) {
+    const std::string base = AllowlistKey(Utf16UnitsToUtf8(DropInvisible(Utf8ToUtf16Units(utf8))));
+    return DenyInRawKey(deny, base) || DenyInRawKey(deny, FoldHomoglyphs(base, true)) ||
+           DenyInRawKey(deny, FoldHomoglyphs(base, false));
+}
+
+}  // namespace
+
+std::vector<CodeReason> ScanDeniedEffects(const std::string& utf8, const std::vector<std::string>& patterns,
+                                          const std::string& parse_error_code) {
+    std::vector<CodeReason> out;
+    try {
+        const std::vector<DenyPattern> deny = CompileDeny(patterns);
+        if (deny.empty()) return out;
+        const std::vector<Token> tokens = Tokenize(utf8);
+        bool refused = utf8.size() > kMaxSourceBytes || parse_error_code == "C_EVAL" ||
+                       parse_error_code == "C_DYNAMIC_NEW";
+        std::string joined;   // "Фоновые" + "Задания": the strings of an executed text, joined
+        for (const Token& t : tokens) {
+            if (t.kind == Bt::Unknown) refused = true;
+            if (t.kind == Bt::String) joined += t.value;
+            if ((t.kind == Bt::Identifier || t.kind == Bt::Keyword) && out.size() < kMaxRisksPerClass &&
+                DenyMatchesName(deny, t.text, t.mixed_script)) {
+                out.push_back(CodeReason{"C_EFFECT_DENIED", Pos{t.pos, t.line, t.col}});
+            }
+        }
+        if (out.empty() && refused && (DenyInRawText(deny, utf8) || DenyInRawText(deny, joined))) {
+            out.push_back(CodeReason{"C_EFFECT_DENIED", Pos{}});
+        }
+    } catch (...) {
+        out.assign(1, CodeReason{"C_EFFECT_DENIED", Pos{}});   // unreadable text: fail closed
+    }
     return out;
 }
 

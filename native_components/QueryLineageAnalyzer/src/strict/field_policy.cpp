@@ -130,7 +130,8 @@ public:
             *error = "Q_POLICY_VERSION";
             return false;
         }
-        if (!ReadTables(root, policy) || !ReadVirtualTables(root, policy) || !ReadParams(root, policy)) {
+        if (!ReadTables(root, policy) || !ReadVirtualTables(root, policy) || !ReadParams(root, policy) ||
+            !ReadDenyEffects(root, policy)) {
             *error = "Q_POLICY_SHAPE";
             return false;
         }
@@ -140,6 +141,24 @@ public:
     }
 
 private:
+    // "deny_effects": an array of effect names, each an identifier (letters, digits, '_') optionally ending with '*'.
+    static bool ReadDenyEffects(const Json& root, FieldPolicy* policy) {
+        const auto deny = root.find("deny_effects");
+        if (deny == root.end()) return true;
+        if (!deny->is_array() || deny->size() > 256) return false;
+        std::vector<std::string> names;
+        for (const auto& n : *deny) {
+            if (!n.is_string()) return false;
+            const std::string name = n.get<std::string>();
+            const bool star = !name.empty() && name.back() == '*';
+            if (name.size() > 128 || !IsIdentifierName(star ? name.substr(0, name.size() - 1) : name)) return false;
+            names.push_back(name);
+        }
+        policy->has_deny_effects_ = true;
+        policy->deny_effects_ = std::move(names);
+        return true;
+    }
+
     static void IndexCompareAllowed(FieldPolicy* policy) {
         const auto add = [policy](const FieldMap& fields) {
             for (const auto& f : fields) {
@@ -287,9 +306,22 @@ FieldPolicy::Parsed FieldPolicy::FromJson(const std::string& json) {
     return result;
 }
 
+const char* const kDefaultDenyEffects[] = {
+    "ФоновыеЗадания", "BackgroundJobs", "РегламентныеЗадания", "ScheduledJobs", "ЗавершитьСеанс", "ЗавершитьРаботуСистемы",
+    "ПрекратитьРаботуСистемы", "УстановитьМонопольныйРежим", "ПользователиИнформационнойБазы", "InfoBaseUsers",
+    "РасширенияКонфигурации", "ConfigurationExtensions", "ХранилищеОбщихНастроек", "CommonSettingsStorage",
+    "ХранилищеСистемныхНастроек", "SystemSettingsStorage", "ХранилищеНастроекДанныхФорм", "FormDataSettingsStorage",
+    "ДлительныеОперации", "TimeConsumingOperations"};
+const size_t kDefaultDenyEffectsCount = sizeof(kDefaultDenyEffects) / sizeof(kDefaultDenyEffects[0]);
+
 bool FieldPolicy::CompareAllowed(const std::string& display) const {
     const auto it = compare_allowed_.find(NormalizeIdentifierKey(display));
     return it != compare_allowed_.end() && it->second;
+}
+
+std::vector<std::string> FieldPolicy::DenyEffects() const {
+    if (has_deny_effects_) return deny_effects_;
+    return std::vector<std::string>(kDefaultDenyEffects, kDefaultDenyEffects + kDefaultDenyEffectsCount);
 }
 
 bool FieldPolicy::HasTable(const std::string& table) const {

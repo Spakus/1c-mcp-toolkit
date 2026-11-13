@@ -24,7 +24,7 @@ namespace {
 using Json = nlohmann::json;
 
 const char* const kInternalFallback =
-    "{\"api\":1,\"verdict\":\"confirm\",\"reasons\":[{\"code\":\"C_INTERNAL\",\"line\":1,\"col\":1,\"offset\":0}],"
+    "{\"api\":2,\"verdict\":\"confirm\",\"reasons\":[{\"code\":\"C_INTERNAL\",\"line\":1,\"col\":1,\"offset\":0}],"
     "\"risks\":[{\"code\":\"R_UNKNOWN_EFFECT\",\"line\":1,\"col\":1}],\"canonical\":\"\",\"result_labels\":{},"
     "\"missing_tables\":[]}";
 
@@ -43,7 +43,7 @@ std::string Dump(const Json& json) {
 
 std::string ToJson(const Outcome& o) {
     Json out = Json::object();
-    out["api"] = 1;
+    out["api"] = 2;
     out["verdict"] = o.verdict;
     out["reasons"] = Json::array();
     for (const CodeReason& r : o.reasons) {
@@ -226,7 +226,9 @@ Outcome Check(const std::string& code, const std::string& policy_json) {
     o.labels = a.result_labels;
     o.missing_tables = a.missing_tables;
 
-    bool clean = o.reasons.empty() && o.risks.empty() && o.missing_tables.empty();
+    // Risks (R_*) are shown, not decisive: the runtime sandbox covers them; what it does not cover is
+    // denied by DenyEffects in CheckWithDeny.
+    bool clean = o.reasons.empty() && o.missing_tables.empty();
     if (o.missing_tables.empty() && !Failed(a) && AllQueriesPrinted(a)) {
         PrintOptions options;
         options.query_replacements = a.query_canonical;
@@ -252,11 +254,29 @@ Outcome Check(const std::string& code, const std::string& policy_json) {
     return o;
 }
 
+// An effect the runtime sandbox does not cover is denied, whatever else the check found. A policy
+// that does not parse has no deny list: the check already refused it.
+Outcome CheckWithDeny(const std::string& code, const std::string& policy_json) {
+    Outcome o = Check(code, policy_json);
+    const strict::FieldPolicy::Parsed policy = strict::FieldPolicy::FromJson(policy_json);
+    if (!policy.ok) return o;
+    std::string refusal;   // a refusal that executes a string: the strings are searched too
+    for (const CodeReason& r : o.reasons) {
+        if (r.code == "C_EVAL" || r.code == "C_DYNAMIC_NEW") refusal = r.code;
+    }
+    const std::vector<CodeReason> denied = ScanDeniedEffects(code, policy.policy.DenyEffects(), refusal);
+    if (!denied.empty()) {
+        o.reasons.insert(o.reasons.begin(), denied.begin(), denied.end());
+        o.verdict = "deny";
+    }
+    return o;
+}
+
 }  // namespace
 
 std::string CheckCodeImpl(const std::string& code, const std::string& policy_json) {
     try {
-        return ToJson(Check(code, policy_json));
+        return ToJson(CheckWithDeny(code, policy_json));
     } catch (...) {
         return kInternalFallback;
     }

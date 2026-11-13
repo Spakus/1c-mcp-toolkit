@@ -1,7 +1,6 @@
 // kind: code
-// expect: confirm
-// reason: C_UNKNOWN_IDENT
-// reason: C_UNKNOWN_RECEIVER
+// expect: deny
+// reason: C_EFFECT_DENIED
 // risk: R_UNKNOWN_EFFECT
 // risk: R_DEFERRED
 // class: 12

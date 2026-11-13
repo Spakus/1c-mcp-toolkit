@@ -103,6 +103,7 @@ TEST(StrictGate, EqualityWithComputedClientTextStaysUnderWindow) {
     CHECK_EQ(V(C(kCode + "Результат = 0;\n" + loop)), std::string("confirm"));
     CHECK_EQ(V(C(kCode + "К = \"А\" + \"Б\"; Если Р.Инн = К Тогда Результат = 1; Иначе Результат = 0; КонецЕсли;")),
              std::string("safe"));   // folded literals are one guess in the text
+    CHECK_EQ(V(C("ДлительныеОперации.Выполнить(Неопределено);")), std::string("deny"));
 }
 
 TEST(StrictGate, PiecewiseComparisonsStayUnderWindow) {
@@ -145,6 +146,11 @@ TEST(StrictGate, OracleReasonsNameOperationAndField) {
     const Json parse = Q("ВЫБРАТЬ ВЫБРАТЬ");
     CHECK(!parse["reasons"][0].contains("field"));
     CHECK(!parse["reasons"][0].contains("op"));
+}
+
+TEST(StrictGate, ApiIsTwo) {
+    CHECK_EQ(Q("ВЫБРАТЬ 1 КАК А")["api"].get<int>(), 2);
+    CHECK_EQ(C("Результат = 1;")["api"].get<int>(), 2);
 }
 
 // ---- compare_allowed ----
@@ -193,6 +199,34 @@ TEST(StrictGate, CompareAllowedMustBeBoolean) {
     const Json bad = Q(kWhere + "К.ИНН = \"1\"", p.dump());
     CHECK(Has(bad, "Q_POLICY_INVALID"));
     CHECK_EQ(V(bad), std::string("confirm"));
+}
+
+// ---- deny_effects ----
+
+TEST(StrictGate, DeniedEffectsAreDeniedNotConfirmed) {
+    CHECK_EQ(V(C("ФоновыеЗадания.Выполнить(\"Х\");")), std::string("deny"));          // the default list
+    CHECK(Has(C("ФоновыеЗадания.Выполнить(\"Х\");"), "C_EFFECT_DENIED"));
+    CHECK_EQ(V(C("Результат = BackgroundJobs.GetBackgroundJobs();")), std::string("deny"));
+    CHECK_EQ(V(C("Выполнить(\"ФоновыеЗадания.Выполнить()\");")), std::string("deny"));   // executed text is searched
+    CHECK_EQ(V(C("Выполнить(\"Фоновые\" + \"Задания.Выполнить()\");")), std::string("deny"));
+    CHECK_EQ(V(C("Результат = \"ФоновыеЗадания\";")), std::string("safe"));            // an ordinary string is just a string
+    // the host's list replaces the default: a prefix, an empty list
+    const Json prefix = Json::array({"Пользовател*"});
+    CHECK_EQ(V(C("Результат = Пользователи1;", Policy({}, &prefix))), std::string("deny"));
+    CHECK_EQ(V(C("ФоновыеЗадания.Выполнить(\"Х\");", Policy({}, &prefix))) == "deny", false);
+    const Json none = Json::array();
+    CHECK_EQ(V(C("ФоновыеЗадания.Выполнить(\"Х\");", Policy({}, &none))), std::string("confirm"));
+    // a deny list that is not an array of names is a malformed policy
+    const Json bad = Json::array({"не имя"});
+    CHECK(Has(C("Результат = 1;", Policy({}, &bad)), "C_POLICY_INVALID"));
+}
+
+TEST(StrictGate, RisksAreShownButDoNotDecide) {
+    const Json j = C("Записать = 1; Результат = Записать;");
+    CHECK_EQ(V(j), std::string("safe"));
+    bool shown = false;
+    for (const Json& r : j["risks"]) shown = shown || r["code"].get<std::string>() == "R_WRITE";
+    CHECK(shown);
 }
 
 // ---- A fixes ----

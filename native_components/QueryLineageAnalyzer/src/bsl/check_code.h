@@ -2,12 +2,18 @@
 #include <string>
 
 // Strict code check, the entry point behind the CheckCode component method. Returns a JSON object:
-//   {"api":1,"verdict":"safe|confirm|incomplete",
-//    "reasons":[{"code","line","col","offset"}], "risks":[{"code","line","col"}],
+//   {"api":2,"verdict":"safe|confirm|deny|incomplete",
+//    "reasons":[{"code","line","col","offset"[,"op","field"]}], "risks":[{"code","line","col"}],
 //    "canonical":"...", "result_labels":{"<path>":"<label>"}, "missing_tables":[...]}
 // The envelope mirrors CheckQueryImpl (strict/check_query.h) except that there are no "columns".
 //
-// Verdict: "safe" only when there is no reason, no risk, no missing table and the canonical text printed; "incomplete"
+// Verdict: risks (R_*) are shown but no longer decide. "deny": the code mentions an effect the host's
+// runtime sandbox does not cover (policy "deny_effects", FieldPolicy::DenyEffects; reason C_EFFECT_DENIED); it is
+// never confirmed and beats every other verdict. "op" ("like" | "range" | "strfunc") and "field" ("<Table>.<Field>" as
+// in the policy) mark an oracle reason: a partial comparison or a string function over protected data; "field" is
+// absent when the content cannot be attributed. On the code path the fields are those of every protected column of
+// the queries the code runs (a superset). "safe" only when there is no reason, no missing table and the canonical text
+// printed (the old rule, with the risks, is gone); "incomplete"
 // when the policy lacks tables (listed in "missing_tables", the host retries with them added; never safe); otherwise
 // "confirm". A parse refusal is "confirm" with the parser's code as the only reason and RefusedCodeRisks as the risks
 // (it always carries R_UNKNOWN_EFFECT). A malformed policy (or token table) is C_POLICY_INVALID / confirm. Never

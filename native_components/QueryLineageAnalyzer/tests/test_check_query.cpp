@@ -63,7 +63,7 @@ const char* const kSelectA = "ВЫБРАТЬ А.Ссылка КАК С ИЗ Сп
 
 TEST(CheckQuery, JsonContract) {
     auto j = nlohmann::json::parse(CheckQueryImpl("ВЫБРАТЬ А.Имя ИЗ Справочник.А КАК А", kPolicyABJson));
-    CHECK_EQ(j["api"].get<int>(), 1);
+    CHECK_EQ(j["api"].get<int>(), 2);
     CHECK_EQ(j["verdict"].get<std::string>(), std::string("safe"));
     CHECK_EQ(j["columns"][0]["name"].get<std::string>(), std::string("Имя"));
     CHECK_EQ(j["columns"][0]["origin"].get<std::string>(), std::string("protected"));

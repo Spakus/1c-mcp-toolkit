@@ -1,4 +1,5 @@
 #pragma once
+#include <cstddef>
 #include <map>
 #include <set>
 #include <string>
@@ -62,6 +63,11 @@ public:
     // primitives over it. False for a name the policy does not list.
     bool CompareAllowed(const std::string& display) const;
 
+    // The effect names the host does not cover by the runtime sandbox ("deny_effects" of the policy: exact names, or
+    // a prefix when the pattern ends with '*'): code that mentions one is denied, never confirmed. The key absent:
+    // kDefaultDenyEffects (provisional); an empty array: nothing is denied.
+    std::vector<std::string> DenyEffects() const;
+
     // Normalized keys of every name the policy lists (a dot segment of a table or virtual table, a field, an extra
     // field) that mixes Latin and Cyrillic letters: real configuration names, not look-alikes (mixed_script.h).
     std::set<std::string> MixedScriptNames() const;
@@ -91,9 +97,17 @@ private:
     std::map<std::string, TableData> tables_;
     std::map<std::string, VirtualData> virtuals_;
     std::map<std::string, ParamOrigin> params_;
-    std::map<std::string, ParamOrigin> param_folds_;
+    std::map<std::string, ParamOrigin> param_folds_;   // collision key (yo folded) -> the origin of its names
     std::map<std::string, bool> compare_allowed_;      // normalized display name -> allowed
+    bool has_deny_effects_ = false;
+    std::vector<std::string> deny_effects_;
 };
+
+// Names of the effects denied when the policy has no "deny_effects" (background work runs in its own session and
+// transaction, so the rollback of the sandbox does not reach it). Provisional until the platform check of the safe
+// mode.
+extern const char* const kDefaultDenyEffects[];
+extern const size_t kDefaultDenyEffectsCount;
 
 // The table the host must add for `table` to resolve: "<T>" for the change table "<T>.Изменения" (the host builds T,
 // the policy derives the change table), `table` itself otherwise.

@@ -7,7 +7,7 @@
 #include "strict/field_policy.h"
 
 // Strict query check, the entry point behind the CheckQuery component method. Returns a JSON object:
-//   {"api":1,"verdict":"safe|confirm|incomplete","reasons":[{"code","line","col","offset"}],
+//   {"api":2,"verdict":"safe|confirm|incomplete","reasons":[{"code","line","col","offset"[,"op","field"]}],
 //    "canonical":"...","columns":[{"name","origin","direct"}],"missing_tables":[...]}
 // "canonical" is empty unless the query parsed and printed; "incomplete" means the policy lacks tables
 // (listed in "missing_tables") and the host should retry with them added. Reasons carry fixed codes and

@@ -106,7 +106,7 @@ TEST(CheckCode, CollidingParamOriginsArePolicyInvalid) {
 
 TEST(CheckCode, EnvelopeShape) {
     const Json j = Check("Результат = 1;");
-    CHECK_EQ(j["api"].get<int>(), 1);
+    CHECK_EQ(j["api"].get<int>(), 2);
     CHECK_EQ(Verdict(j), std::string("safe"));
     CHECK(j["reasons"].is_array() && j["reasons"].empty());
     CHECK(j["risks"].is_array() && j["risks"].empty());

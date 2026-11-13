@@ -17,9 +17,9 @@ namespace lineage {
 
 namespace {
 const wchar_t* const kCheckFailClosed =
-    L"{\"api\":1,\"verdict\":\"confirm\",\"reasons\":[{\"code\":\"Q_INTERNAL\"}]}";
+    L"{\"api\":2,\"verdict\":\"confirm\",\"reasons\":[{\"code\":\"Q_INTERNAL\"}]}";
 const wchar_t* const kCheckCodeFailClosed =
-    L"{\"api\":1,\"verdict\":\"confirm\",\"reasons\":[{\"code\":\"C_INTERNAL\",\"line\":1,\"col\":1,\"offset\":0}],"
+    L"{\"api\":2,\"verdict\":\"confirm\",\"reasons\":[{\"code\":\"C_INTERNAL\",\"line\":1,\"col\":1,\"offset\":0}],"
     L"\"risks\":[{\"code\":\"R_UNKNOWN_EFFECT\",\"line\":1,\"col\":1}],\"canonical\":\"\",\"result_labels\":{},"
     L"\"missing_tables\":[]}";
 }  // namespace

@@ -612,12 +612,13 @@ TEST(BslTaint, RiskClasses) {
     CHECK(HasRisk(CheckCodeForTest(kPolicyAB, "Результат = СтрокаСоединенияИнформационнойБазы();"), "R_CREDENTIALS"));
 }
 
-TEST(BslTaint, RiskForcesConfirmEvenWhenOtherwiseSafe) {
-    // A variable that only happens to carry a risky name: no reason at all, still a risk and a confirmation.
+TEST(BslTaint, RiskIsShownButDoesNotDecide) {
+    // A variable that only happens to carry a risky name: no reason at all, the risk is shown, the verdict is safe:
+    // the runtime sandbox covers writes; what it does not cover is the policy's deny_effects.
     const auto r = CheckCodeForTest(kPolicyAB, "Записать = 1; Результат = Записать;");
     CHECK(r.reasons.empty());
     CHECK(HasRisk(r, "R_WRITE"));
-    CHECK(r.verdict == CodeVerdict::Confirm);
+    CHECK(r.verdict == CodeVerdict::Safe);
     const auto plain = CheckCodeForTest(kPolicyAB, "Х = 1; Результат = Х;");
     CHECK(plain.risks.empty());
     CHECK(plain.verdict == CodeVerdict::Safe);

@@ -24,7 +24,7 @@ namespace {
 
 using Json = nlohmann::json;
 
-const char* const kInternalFallback = "{\"api\":1,\"verdict\":\"confirm\",\"reasons\":[{\"code\":\"Q_INTERNAL\"}]}";
+const char* const kInternalFallback = "{\"api\":2,\"verdict\":\"confirm\",\"reasons\":[{\"code\":\"Q_INTERNAL\"}]}";
 
 Json MakeReason(const std::string& code, const Pos* pos) {
     Json reason = Json::object();
@@ -43,7 +43,7 @@ std::string Dump(const Json& json) {
 
 Json Skeleton() {
     Json out = Json::object();
-    out["api"] = 1;
+    out["api"] = 2;
     out["verdict"] = "confirm";
     out["reasons"] = Json::array();
     out["canonical"] = "";
