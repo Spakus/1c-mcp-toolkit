@@ -35,7 +35,7 @@ struct Tables {
     std::map<std::pair<int, std::string>, const PropertyRule*> properties;
     std::map<std::string, const GlobalProperty*> global_props;
     std::set<std::string> context_names;
-    std::set<std::string> query_text, property_method, eval_member;
+    std::set<std::string> query_text, property_method, eval_member, string_functions;
 
     Tables() {
         for (const GlobalRule& r : kGlobalRules) {
@@ -59,6 +59,7 @@ struct Tables {
             global_props[AllowlistKey(p.en)] = &p;
         }
         for (const char* n : kContextNames) context_names.insert(AllowlistKey(n));
+        for (const char* n : kStringFunctions) string_functions.insert(AllowlistKey(n));
         query_text = {AllowlistKey(kQueryTextRu), AllowlistKey(kQueryTextEn)};
         property_method = {AllowlistKey(kPropertyMethodRu), AllowlistKey(kPropertyMethodEn)};
         eval_member = {AllowlistKey(kEvalMemberRu), AllowlistKey(kEvalMemberEn)};
@@ -345,10 +346,18 @@ private:
     size_t& work_;                                  // the analysis-wide budget (TypeCheckOptions::work)
     bool exhausted_ = false;
 
-    void Add(const char* code, const Pos& pos) {
+    void Add(const char* code, const Pos& pos, const char* op = "") {
         if (!seen_.insert({code, pos.offset}).second) return;
-        result_.reasons.push_back(CodeReason{code, pos});
+        result_.reasons.push_back(CodeReason{code, pos, op, std::string()});
     }
+
+    // The protected sources the walk meets (CodeAnalysis::source_fields).
+    void NoteColumn(const ColumnInfo& c) {
+        if (!IsTainted(c.origin)) return;
+        result_.source_fields.insert(c.fields.begin(), c.fields.end());
+        result_.source_unattributed = result_.source_unattributed || c.unattributed;
+    }
+    void NoteUnattributed() { result_.source_unattributed = true; }
 
     // A call whose callee the allowlist does not know can do anything, writes included (R_UNKNOWN_EFFECT).
     void AddUnknownEffect(const Pos& pos) {
@@ -456,15 +465,20 @@ private:
     Origin WithPc(Origin v) const { return IsTainted(pc_) ? JoinOrigin(v, pc_) : v; }
 
     // An operation over a tainted input: a reason, and the Исключение blocks of enclosing Попытка depend on it.
-    void TaintedOp(const Pos& pos, Origin input) {
-        Add("C_FUNC_OVER_PROTECTED", pos);
+    void TaintedOp(const Pos& pos, Origin input, const char* op = "") {
+        Add("C_FUNC_OVER_PROTECTED", pos, op);
         for (Frame* f : frames_) {
             if (f->is_try) JoinInto(f->taint, Transform(input));
         }
     }
 
-    void CheckOp(const Pos& pos, Origin input) {
-        if (IsTainted(input)) TaintedOp(pos, input);
+    void CheckOp(const Pos& pos, Origin input, const char* op = "") {
+        if (IsTainted(input)) TaintedOp(pos, input, op);
+    }
+
+    // A protected label the host's "compare_allowed" covers (oracle_open): not Unknown, which absorbs everything.
+    bool OpenableLabel(Origin input) const {
+        return options_.oracle_open && IsTainted(input) && input != Origin::Unknown;
     }
 
     // Inserting a key compares it with every key already stored (de-duplication), an equality oracle: a tainted key,
@@ -608,6 +622,7 @@ private:
     std::optional<Origin> Presentation(const VType& v) {
         std::optional<Origin> acc;
         if (!MayBeRef(v)) return acc;
+        NoteUnattributed();   // the presentation of a reference is not a policy field
         for (const std::string& t : v.refs) {
             if (!options_.policy) {
                 JoinInto(acc, Origin::Unknown);
@@ -693,6 +708,7 @@ private:
             case TokenUse::Bound: {
                 // The host's real value: its type is not known, so it is not assumed to be a string.
                 result_.bound_tokens[&e] = b.index;
+                if (IsTainted(b.origin)) NoteUnattributed();   // the token's field is not known
                 VType bound;
                 bound.label = b.origin;
                 return bound;
@@ -756,7 +772,10 @@ private:
         if (obj.ty == Ty::Selection || obj.ty == Ty::TableRow) {
             if (obj.columns) {
                 const auto it = obj.columns->columns.find(key);
-                if (it != obj.columns->columns.end()) return ColumnType(it->second, obj);
+                if (it != obj.columns->columns.end()) {
+                    NoteColumn(it->second);
+                    return ColumnType(it->second, obj);
+                }
             }
             Add("C_UNKNOWN_MEMBER", e.pos);
             return VType();
@@ -830,6 +849,13 @@ private:
                 return VType();
             }
             JoinInto(label, ClassLabel(policy->ClassOf(t, e.text)));
+            if (policy->ClassOf(t, e.text) != strict::FieldClass::Open) {
+                if (field && policy->ClassOf(t, e.text) == strict::FieldClass::Protected && !field->display.empty()) {
+                    result_.source_fields.insert(field->display);
+                } else {
+                    NoteUnattributed();
+                }
+            }
             if (field && !field->refs.empty()) {
                 v.refs.insert(field->refs.begin(), field->refs.end());
             } else {
@@ -929,8 +955,16 @@ private:
         std::optional<Origin> input;
         for (const VType& a : args) JoinInto(input, rule.taint == Taint::Open ? ReadAsValue(a) : ValueLabel(a));
         if (rule.taint == Taint::Confirm) Add("C_FUNC_OVER_PROTECTED", e.pos);
-        if (input) CheckOp(e.pos, *input);
-        return Typed(rule.result, input ? Transform(*input) : Origin::Open);
+        const bool string_function = T().string_functions.count(AllowlistKey(e.text)) != 0;
+        Origin out = input ? Transform(*input) : Origin::Open;
+        if (input && string_function && OpenableLabel(*input)) {
+            // The host allows comparing every protected source of the code: the oracle is no reason; a number or a
+            // Boolean it returns is an open bit, a string stays derived.
+            if (rule.result == Ty::Number || rule.result == Ty::Boolean) out = Origin::Open;
+        } else if (input) {
+            CheckOp(e.pos, *input, string_function ? "strfunc" : "");
+        }
+        return Typed(rule.result, out);
     }
 
     VType EvalNew(const Expr& e) {
@@ -1191,6 +1225,7 @@ private:
             if (it != table.columns->columns.end()) column = &it->second;
         }
         if (column) {
+            NoteColumn(*column);
             NoteSlot(ol.elem, ColumnType(*column, table));
             JoinInto(ol.content, column->origin);
             ol.refs.insert(column->refs.begin(), column->refs.end());
@@ -1405,11 +1440,12 @@ private:
             JoinInto(input, Presentation(a));
             JoinInto(input, Presentation(b));
         }
-        CheckOp(e.pos, *input);
+        const bool equality = op == "=" || op == "<>";
+        const bool ordering = op == "<" || op == ">" || op == "<=" || op == ">=";
+        if ((equality || ordering) && OpenableLabel(*input)) return Typed(Ty::Boolean, Origin::Open);   // compare_allowed
+        CheckOp(e.pos, *input, ordering ? "range" : (equality ? "strfunc" : ""));
         const Origin label = Transform(*input);
-        if (logic || op == "=" || op == "<>" || op == "<" || op == ">" || op == "<=" || op == ">=") {
-            return Typed(Ty::Boolean, label);
-        }
+        if (logic || equality || ordering) return Typed(Ty::Boolean, label);
         // The left operand decides the operation: a number stays a number (or the call fails), a string concatenates.
         if (a.ty == Ty::Number) return Typed(Ty::Number, label);
         if (op == "+" && a.ty == Ty::String) {

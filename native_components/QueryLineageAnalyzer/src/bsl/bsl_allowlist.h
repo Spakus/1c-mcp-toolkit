@@ -177,6 +177,16 @@ inline constexpr GlobalRule kGlobalRules[] = {
      0, 0, ArgRule::Any},
 };
 
+// Global functions that probe the pieces of a string (op "strfunc"): over protected data they are an
+// oracle that a host's "compare_allowed" can cover. Each of them reveals a protected value bit by bit when its result
+// leaves as a number or a Boolean (СтрДлина, СтрНайти, КодСимвола, СтрСравнить, ...); those that return a string
+// (Лев, Сред, ...) give a derived value, which stays protected, and the oracle is the comparison made with it.
+inline constexpr const char* kStringFunctions[] = {
+    "Лев", "Прав", "Сред", "СтрДлина", "Найти", "КодСимвола", "ВРег", "НРег", "СокрЛП", "СокрЛ", "СокрП", "СтрЗаменить",
+    "СтрНайти", "СтрНачинаетсяС", "СтрЗаканчиваетсяНа", "СтрЧислоВхождений", "СтрРазделить", "СтрСравнить",
+    "Left", "Right", "Mid", "StrLen", "Find", "CharCode", "Upper", "Lower", "TrimAll", "TrimL", "TrimR", "StrReplace",
+    "StrFind", "StrStartsWith", "StrEndsWith", "StrOccurrenceCount", "StrSplit", "StrCompare"};
+
 // Global properties read without a call. Managers carry the singular table kind of their tables; registers,
 // constants, data processors, reports and common modules are deliberately absent (writes, R_* names, arbitrary code).
 struct GlobalProperty {

@@ -72,6 +72,9 @@ void MergeRisks(std::vector<CodeReason>& into, const std::vector<CodeReason>& mo
 // Property reads without a call stay a reason only.
 
 // The taint pass over a body. `tokens` may be empty. Never throws: an internal failure is C_INTERNAL / confirm.
-CodeAnalysis AnalyzeCode(const Body& body, const strict::FieldPolicy& policy, const TokenTable& tokens);
+// `oracle_open`: see TypeCheckOptions::oracle_open (the caller sets it after checking CodeAnalysis::source_fields of a
+// first call against the policy's "compare_allowed").
+CodeAnalysis AnalyzeCode(const Body& body, const strict::FieldPolicy& policy, const TokenTable& tokens,
+                         bool oracle_open = false);
 
 }  // namespace lineage::bsl

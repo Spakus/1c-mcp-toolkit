@@ -51,6 +51,8 @@ std::string ToJson(const Outcome& o) {
         reason["line"] = r.pos.line;
         reason["col"] = r.pos.col;
         reason["offset"] = r.pos.offset;
+        if (!r.op.empty()) reason["op"] = r.op;
+        if (!r.field.empty()) reason["field"] = r.field;
         out["reasons"].push_back(reason);
     }
     out["risks"] = Json::array();
@@ -112,6 +114,26 @@ bool HasRefusedMixedName(const std::vector<Token>& tokens) {
     return false;
 }
 
+// The reasons of the walk with the oracle ones named by field: a C_FUNC_OVER_PROTECTED with an op becomes one reason
+// per protected source field of the code (a superset of the fields the operation reads: the code path attributes
+// coarsely), and one without a field when a source has none. Q_* reasons of the query check come named already.
+std::vector<CodeReason> ExpandOracleReasons(const CodeAnalysis& a) {
+    std::vector<CodeReason> out;
+    for (const CodeReason& r : a.reasons) {
+        if (r.op.empty() || !r.field.empty() || r.code != "C_FUNC_OVER_PROTECTED") {
+            out.push_back(r);
+            continue;
+        }
+        for (const std::string& f : a.source_fields) {
+            CodeReason named = r;
+            named.field = f;
+            out.push_back(std::move(named));
+        }
+        if (a.source_unattributed || a.source_fields.empty()) out.push_back(r);
+    }
+    return out;
+}
+
 bool Failed(const CodeAnalysis& a) {
     for (const CodeReason& r : a.reasons) {
         if (r.code == "C_LIMIT" || r.code == "C_INTERNAL" || r.code == "Q_INTERNAL") return true;
@@ -148,9 +170,16 @@ Outcome Check(const std::string& code, const std::string& policy_json) {
         return o;
     }
 
-    const CodeAnalysis a = AnalyzeCode(parsed.body, policy.policy, tokens);
+    CodeAnalysis a = AnalyzeCode(parsed.body, policy.policy, tokens);
+    // Every protected source is a field the host allows to compare, and no token is involved: walk again with the
+    // oracle primitives open. The second walk's reasons are the ones that remain.
+    if (a.source_unattributed == false && !a.source_fields.empty() && a.bound_tokens.empty()) {
+        bool all_allowed = true;
+        for (const std::string& f : a.source_fields) all_allowed = all_allowed && policy.policy.CompareAllowed(f);
+        if (all_allowed) a = AnalyzeCode(parsed.body, policy.policy, tokens, true);
+    }
     Outcome o;
-    o.reasons = a.reasons;
+    o.reasons = ExpandOracleReasons(a);
     for (const CodeReason& r : a.result_reasons) o.reasons.push_back(r);
     o.risks = a.risks;
     MergeRisks(o.risks, ScanRisksInSource(code));

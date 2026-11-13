@@ -122,6 +122,8 @@ public:
                 info.origin = c.origin;
                 info.refs = c.refs;
                 info.refs_known = c.refs_known;
+                info.fields = c.attr.fields;
+                info.unattributed = c.attr.unattributed;
                 const std::string name = AllowlistKey(c.name);
                 const auto existing = set.columns.find(name);
                 if (existing == set.columns.end()) {
@@ -169,6 +171,8 @@ private:
     // Targets survive only when both sides are references (as for ОБЪЕДИНИТЬ in the query checker).
     static void MergeInto(ColumnInfo& into, const ColumnInfo& other) {
         into.origin = JoinOrigin(into.origin, other.origin);
+        into.fields.insert(other.fields.begin(), other.fields.end());
+        into.unattributed = into.unattributed || other.unattributed;
         if (into.refs.empty() || other.refs.empty()) {
             const bool lost = !into.refs.empty() || !other.refs.empty();   // a reference on one side only
             into.refs_known = into.refs_known && other.refs_known && !lost;
@@ -190,11 +194,12 @@ private:
     std::map<std::string, strict::QueryCheckResult> checks_;
 };
 
-void AddReason(CodeAnalysis& a, const std::string& code, const Pos& pos) {
+void AddReason(CodeAnalysis& a, const std::string& code, const Pos& pos, const std::string& op = std::string(),
+               const std::string& field = std::string()) {
     for (const CodeReason& r : a.reasons) {
-        if (r.code == code && r.pos.offset == pos.offset) return;
+        if (r.code == code && r.pos.offset == pos.offset && r.op == op && r.field == field) return;
     }
-    a.reasons.push_back(CodeReason{code, pos});
+    a.reasons.push_back(CodeReason{code, pos, op, field});
 }
 
 std::set<const Expr*> TextExprs(const CodeAnalysis& a) {
@@ -465,12 +470,13 @@ std::vector<CodeReason> ScanBodyRisks(const Body& body) {
     return out;
 }
 
-CodeAnalysis Drive(const Body& body, const strict::FieldPolicy& policy, const TokenTable& tokens) {
+CodeAnalysis Drive(const Body& body, const strict::FieldPolicy& policy, const TokenTable& tokens, bool oracle_open) {
     size_t work = 0;   // one budget for every walk below
     TypeCheckOptions base;
     base.policy = &policy;
     base.tokens = &tokens;
     base.work = &work;
+    base.oracle_open = oracle_open;
 
     // The query texts depend on the Запрос types only, never on labels: one walk collects them.
     LabelState scratch;
@@ -512,12 +518,28 @@ CodeAnalysis Drive(const Body& body, const strict::FieldPolicy& policy, const To
         const Params params = ParamsOf(state, site.first);
         for (const QueryTextUse& use : site.second) {
             const strict::QueryCheckResult& r = checker.Check(use.text, params);
-            for (const strict::QueryReason& reason : r.reasons) AddReason(result, reason.code, use.text_expr->pos);
+            for (const strict::QueryReason& reason : r.reasons) {
+                AddReason(result, reason.code, use.text_expr->pos, reason.op, reason.field);
+            }
             result.missing_tables.insert(r.missing_tables.begin(), r.missing_tables.end());
             if (r.verdict != "safe" && r.reasons.empty() && r.missing_tables.empty()) {
                 AddReason(result, "Q_INTERNAL", use.text_expr->pos);
             }
             if (!r.canonical.empty()) result.query_canonical[use.text_expr] = r.canonical;
+        }
+    }
+    // Protected sources of the whole code (CodeAnalysis::source_fields): coarse on purpose, every protected column of
+    // every query the code runs, not only the ones the walk read; a site whose columns are unknown is unattributed.
+    for (const auto& site : checker.Sites()) {
+        const std::shared_ptr<const ColumnSet> columns = checker.Columns(site.first, ParamsOf(state, site.first));
+        if (!columns) {
+            result.source_unattributed = true;
+            continue;
+        }
+        for (const auto& c : columns->columns) {
+            if (!IsTainted(c.second.origin)) continue;
+            result.source_fields.insert(c.second.fields.begin(), c.second.fields.end());
+            result.source_unattributed = result.source_unattributed || c.second.unattributed;
         }
     }
     // The walk did not complete: nothing it saw can be trusted, so the code may do anything.
@@ -675,9 +697,10 @@ void MergeRisks(std::vector<CodeReason>& into, const std::vector<CodeReason>& mo
     }
 }
 
-CodeAnalysis AnalyzeCode(const Body& body, const strict::FieldPolicy& policy, const TokenTable& tokens) {
+CodeAnalysis AnalyzeCode(const Body& body, const strict::FieldPolicy& policy, const TokenTable& tokens,
+                         bool oracle_open) {
     try {
-        return Drive(body, policy, tokens);
+        return Drive(body, policy, tokens, oracle_open);
     } catch (...) {
         CodeAnalysis r;
         r.reasons.push_back(CodeReason{"C_INTERNAL", Pos{}});

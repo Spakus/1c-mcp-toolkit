@@ -80,8 +80,13 @@ struct ColumnInfo {
     std::vector<std::string> refs;   // target tables when the column holds a reference (non-empty => Ty::Ref)
     Origin origin = Origin::Unknown; // label of the column's values (CheckQuery)
     bool refs_known = false;         // `refs` is complete; false: may be a reference whose targets were lost
+    // The policy fields the column reads protected content from (strict::Attribution): an oracle reason of the code
+    // names them, and "compare_allowed" covers a value only when every one is allowed.
+    std::set<std::string> fields;
+    bool unattributed = false;
     bool operator==(const ColumnInfo& o) const {
-        return refs == o.refs && origin == o.origin && refs_known == o.refs_known;
+        return refs == o.refs && origin == o.origin && refs_known == o.refs_known && fields == o.fields &&
+               unattributed == o.unattributed;
     }
 };
 
@@ -113,6 +118,11 @@ struct TypeCheckOptions {
     // Work counter shared by every walk of one analysis (statements plus environment entries copied); over
     // kMaxCodeWork the walk stops with C_LIMIT. Null: each walk counts on its own.
     size_t* work = nullptr;
+    // Every protected source of the code is a field the host allows to compare (policy "compare_allowed", decided by
+    // the caller from CodeAnalysis::source_fields of a first walk): string functions over data that return a number or
+    // a Boolean, and comparisons, are open bits (no C_FUNC_OVER_PROTECTED, an Open result); a string function that
+    // returns a string adds no reason either but keeps a derived label. Unknown labels still give their reasons.
+    bool oracle_open = false;
 };
 
 constexpr size_t kMaxCodeWork = 500000;   // well under a second; ordinary client code uses a few percent
@@ -181,6 +191,8 @@ struct LabelState {
 struct CodeReason {
     std::string code;
     Pos pos;
+    std::string op;      // oracle primitive of a C_FUNC_OVER_PROTECTED / Q_* reason: "like" | "range" | "strfunc"
+    std::string field;   // the policy field it probes (set by the CheckCode layer for C_*, by CheckQuery for Q_*)
 };
 
 // Hand-off to the taint pass: one Запрос site may carry several texts (Новый Запрос(t1), then .Текст = t2, or assignments on
@@ -252,6 +264,11 @@ struct CodeAnalysis {
     // are NOT in `reasons` and do not change `verdict`: the CheckCode layer merges them.
     std::vector<ResultPath> result_labels;
     std::vector<CodeReason> result_reasons;
+    // Every place a protected value can come from: the policy fields of the query columns read and of
+    // the references dereferenced; `source_unattributed` when some source has no field (a token, a presentation, a
+    // column the query check could not attribute).
+    std::set<std::string> source_fields;
+    bool source_unattributed = false;
 };
 
 // The final value of Результат as the description pass sees it (a flattened VType of bsl_types.cpp).

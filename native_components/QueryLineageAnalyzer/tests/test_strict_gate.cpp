@@ -137,6 +137,10 @@ TEST(StrictGate, OracleReasonsNameOperationAndField) {
     // ordering by a protected string
     CHECK(Oracles(Q("ВЫБРАТЬ К.Порядок КАК П ИЗ Справочник.Контрагенты КАК К УПОРЯДОЧИТЬ ПО К.Наименование")) ==
           (std::set<std::string>{"Q_ORDER_PROTECTED/range@" + name}));
+    // in code the fields are those of the code's queries (a superset), the op is the primitive
+    const Json j = C(kCode + "Результат = СтрДлина(Р.Имя);");
+    CHECK(Oracles(j) == (std::set<std::string>{"C_FUNC_OVER_PROTECTED/strfunc@" + name,
+                                               "C_FUNC_OVER_PROTECTED/strfunc@" + inn}));
     // a parse refusal carries no field and no op
     const Json parse = Q("ВЫБРАТЬ ВЫБРАТЬ");
     CHECK(!parse["reasons"][0].contains("field"));
@@ -166,6 +170,21 @@ TEST(StrictGate, CompareAllowedOpensOnlyItsOwnField) {
     CHECK_EQ(V(Q("ВЫБРАТЬ ПОДСТРОКА(К.Наименование, 1, 1) КАК Х ИЗ Справочник.Контрагенты КАК К", Policy(name_only))),
              std::string("confirm"));
     CHECK_EQ(V(Q("ВЫБРАТЬ К.Наименование КАК Х ИЗ Справочник.Контрагенты КАК К", Policy(name_only))), std::string("safe"));
+}
+
+TEST(StrictGate, CompareAllowedInCodeNeedsEveryProtectedSourceAllowed) {
+    const std::vector<std::string> both{kNameField, kInnField};
+    CHECK_EQ(V(C(kCode + "Результат = СтрДлина(Р.Имя);", Policy(both))), std::string("safe"));
+    CHECK_EQ(V(C(kCode + "Если Лев(Р.Имя, 1) = \"А\" Тогда Результат = 1; Иначе Результат = 0; КонецЕсли;", Policy(both))),
+             std::string("safe"));
+    CHECK_EQ(V(C(kCode + "Если Р.Имя > \"М\" Тогда Результат = 1; Иначе Результат = 0; КонецЕсли;", Policy(both))),
+             std::string("safe"));
+    // the code reads two protected columns, one is allowed: the code path attributes coarsely, so it is not enough
+    CHECK_EQ(V(C(kCode + "Результат = СтрДлина(Р.Имя);", Policy({kNameField}))), std::string("confirm"));
+    // the allowed comparison does not unprotect the value: a derived string leaving as Результат is still stopped
+    const Json derived = C(kCode + "Результат = Лев(Р.Имя, 1);", Policy(both));
+    CHECK_EQ(V(derived), std::string("confirm"));
+    CHECK(!Has(derived, "C_FUNC_OVER_PROTECTED"));
 }
 
 TEST(StrictGate, CompareAllowedMustBeBoolean) {
