@@ -146,6 +146,23 @@ bool MayBeRef(const VType& v) {
     return v.ty == Ty::Ref || (v.ty == Ty::Unknown && (v.ref_unknown || !v.refs.empty()));
 }
 
+// A value that is a scalar for the Результат description: a primitive, a type value, a UUID, or a query cell that is
+// provably not a reference. Joining it with anything else keeps "may be a reference or an object" (ref_unknown).
+bool ScalarLike(const VType& v) {
+    switch (v.ty) {
+        case Ty::Undefined:
+        case Ty::Null:
+        case Ty::Boolean:
+        case Ty::Number:
+        case Ty::String:
+        case Ty::Date:
+        case Ty::TypeValue:
+        case Ty::Uuid: return true;
+        case Ty::Unknown: return (v.cell || v.maybe_unassigned) && !v.ref_unknown && v.objs.empty();
+        default: return false;
+    }
+}
+
 // Two values that may reach the same place. Different types, or different Запрос objects, join to Unknown; the
 // labels, collections and reference targets of both sides are kept.
 VType JoinType(const VType& a, const VType& b) {
@@ -158,7 +175,10 @@ VType JoinType(const VType& a, const VType& b) {
     r.refs.insert(b.refs.begin(), b.refs.end());
     r.ref_unknown = a.ref_unknown || b.ref_unknown;
     r.cell = a.cell && b.cell;
-    if (a.ty != b.ty) return r;
+    if (a.ty != b.ty) {
+        if (!ScalarLike(a) || !ScalarLike(b)) r.ref_unknown = true;   // an object or a reference may be one of them
+        return r;
+    }
     if (a.ty == Ty::Query && a.site != b.site) return r;
     r.ty = a.ty;
     r.site = a.site;
@@ -721,6 +741,7 @@ private:
             v.ref_unknown = false;
         } else {
             v.cell = true;   // provably not a reference
+            v.ref_unknown = false;   // so reading it as a string or a number is not a presentation read
         }
         return v;
     }
@@ -1383,6 +1404,7 @@ private:
         }
         VType r;
         r.label = label;
+        r.ref_unknown = MayBeRef(a) || MayBeRef(b);   // arithmetic over two non-references is not a reference
         return r;
     }
 

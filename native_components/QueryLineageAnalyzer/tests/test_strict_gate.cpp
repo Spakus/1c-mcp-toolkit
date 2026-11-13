@@ -83,6 +83,17 @@ const std::string kCode =
 
 }  // namespace
 
+// ---- A fixes ----
+
+TEST(StrictGate, NumbersOverOpenColumnsAreOpen) {
+    CHECK_EQ(V(C(kCode + "Результат = СтрДлина(Р.Порядок) + Р.Порядок + 1;")), std::string("safe"));
+    CHECK_EQ(V(C(kCode + "Результат = Р.Порядок + 1;")), std::string("safe"));
+    CHECK_EQ(V(C(kCode + "Результат = Строка(Р.Порядок);")), std::string("safe"));
+    // a cell joined with an object on two paths is not a cell
+    CHECK_EQ(V(C(kCode + "Если Р.Порядок = 1 Тогда Х = Р.Порядок; Иначе Х = Т; КонецЕсли; Результат = Х;")),
+             std::string("confirm"));
+}
+
 TEST(StrictGate, KeywordAliasesStayRefused) {
     for (const char* alias : {"Есть", "И", "Истина"}) {
         CHECK(Has(Q(std::string("ВЫБРАТЬ К.Порядок КАК ") + alias + " ИЗ Справочник.Контрагенты КАК К"), "Q_PARSE_EXPECTED"));

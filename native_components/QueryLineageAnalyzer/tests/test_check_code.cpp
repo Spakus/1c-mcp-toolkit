@@ -193,12 +193,14 @@ TEST(CheckCode, OpenColumnCellWithoutTargetsIsOpen) {
     CHECK_EQ(Label(joined, "$"), std::string("open"));
     const Json mixed = Check(q + "Если В.Сумма = 1 Тогда Х = В.Сумма; Иначе Х = В; КонецЕсли; Результат = Х;");
     CHECK_EQ(Verdict(mixed), std::string("confirm"));
-    // Anything but a move keeps the old rule: the value may still be a reference whose presentation is read.
-    for (const char* code : {"Результат = Строка(В.Сумма);", "Результат = \"x\" + В.Сумма;",
-                             "М = Новый Массив; М.Добавить(В.Сумма); Результат = М[0];",
-                             "Результат = Новый Структура(\"К\", Т.ВыгрузитьКолонку(\"Сумма\")[0]);"}) {
-        CHECK_EQ(Verdict(Check(q + code)), std::string("confirm"));
-    }
+    // A cell that is provably not a reference is no presentation read: functions and operators over it are open.
+    CHECK_EQ(Verdict(Check(q + "Результат = Строка(В.Сумма);")), std::string("safe"));
+    CHECK_EQ(Verdict(Check(q + "Результат = \"x\" + В.Сумма;")), std::string("safe"));
+    // What a collection holds keeps the "not a reference" of the cells stored in it.
+    CHECK_EQ(Verdict(Check(q + "М = Новый Массив; М.Добавить(В.Сумма); Результат = Строка(М[0]);")), std::string("safe"));
+    // An element read back by an index of a column unload is a value of unknown type.
+    CHECK_EQ(Verdict(Check(q + "Результат = Новый Структура(\"К\", Т.ВыгрузитьКолонку(\"Сумма\")[0]);")),
+             std::string("confirm"));
     // A protected column stays protected, a tainted holder taints the cell.
     const Json prot = Check(std::string(kQuery) + "В = З.Выполнить().Выбрать(); В.Следующий(); Результат = В.Имя;");
     CHECK_EQ(Label(prot, "$"), std::string("protected"));
