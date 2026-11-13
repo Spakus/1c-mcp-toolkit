@@ -833,3 +833,35 @@ TEST(StrictGate, ComputedScalarJoinedWithACollectionStaysComputed) {
     CHECK_EQ(V(C(head + "Для Сч = 1 По 3 Цикл\nП = \"а\";\nЕсли Сч > 1 Тогда П = Новый Массив; П.Добавить(\"б\"); КонецЕсли;\n" +
                  tail)), std::string("safe"));
 }
+
+// ---- qualified deny entries fold RU / EN spellings and the module named by a string ----
+
+TEST(StrictGate, QualifiedDenyEntryFoldsRussianAndEnglishSpellings) {
+    const std::vector<std::string> entry{"Документы.ЗаписатьВсё"};
+    CHECK_EQ(DenyOf(entry, "Документы.ЗаписатьВсё();"), std::string("deny"));
+    CHECK_EQ(DenyOf(entry, "Documents.ЗаписатьВсё();"), std::string("deny"));
+    CHECK_EQ(DenyOf(entry, "Документы.WriteAll();"), std::string("deny"));
+    CHECK_EQ(DenyOf(entry, "Documents.WriteAll();"), std::string("deny"));
+    CHECK_EQ(DenyOf({"Documents.WriteAll"}, "Документы.ЗаписатьВсё();"), std::string("deny"));
+    CHECK_EQ(DenyOf({"Справочники.Удалить"}, "Catalogs.Delete(1);"), std::string("deny"));
+    CHECK_EQ(DenyOf({"Catalogs.Delete"}, "Справочники.Удалить(1);"), std::string("deny"));
+    // another method of the same manager, in either language, is not the pair
+    const Json deny = Json(entry);
+    CHECK(V(C("Результат = Documents.FindByCode(\"1\");", Policy({}, &deny))) != "deny");
+    CHECK(V(C("Результат = Документы.НайтиПоКоду(\"1\");", Policy({}, &deny))) != "deny");
+    // an executed string
+    CHECK_EQ(DenyOf(entry, "Выполнить(\"Documents.WriteAll()\");"), std::string("deny"));
+}
+
+TEST(StrictGate, QualifiedDenyEntryReadsAModuleNamedByAString) {
+    const std::vector<std::string> entry{"ОбщегоНазначения.ЗаписатьОбъект"};
+    CHECK_EQ(DenyOf(entry, "ПолучитьОбщийМодуль(\"ОбщегоНазначения\").ЗаписатьОбъект(1);"), std::string("deny"));
+    CHECK_EQ(DenyOf(entry, "ОбщийМодуль(\"ОбщегоНазначения\").ЗаписатьОбъект(1);"), std::string("deny"));
+    CHECK_EQ(DenyOf(entry, "GetCommonModule(\"общегоназначения\").ЗаписатьОбъект(1);"), std::string("deny"));
+    // carried under a variable
+    CHECK_EQ(DenyOf(entry, "М = ПолучитьОбщийМодуль(\"ОбщегоНазначения\"); М.ЗаписатьОбъект(1);"), std::string("deny"));
+    // another method of the module, or another module
+    const Json deny = Json(entry);
+    CHECK(V(C("Результат = ПолучитьОбщийМодуль(\"ОбщегоНазначения\").Прочитать(1);", Policy({}, &deny))) != "deny");
+    CHECK(V(C("Результат = ПолучитьОбщийМодуль(\"Другой\").ЗаписатьОбъект(1);", Policy({}, &deny))) != "deny");
+}

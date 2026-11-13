@@ -644,7 +644,56 @@ struct DenyPattern {
     bool prefix = false;   // `key` is a prefix; of a qualified entry, `method` is
     bool qualified = false;
     std::string method;    // qualified entry: the method
+    // Qualified entry: every RU / EN spelling of the manager and of the method (SynonymsOf), `key` / `method` included.
+    std::vector<std::string> key_alts, method_alts;
 };
+
+// RU / EN spellings of the same platform name, for qualified entries: manager roots and methods of the allowlist plus
+// the common write / call verbs and storages below. A name outside the table stands for itself (a configuration
+// module, a method the table does not list); a prefix method (`Name*`) is matched in the spelling it was written in.
+struct NamePair {
+    const char* ru;
+    const char* en;
+};
+
+constexpr NamePair kExtraNamePairs[] = {
+    {"Записать", "Write"}, {"ЗаписатьВсё", "WriteAll"}, {"Удалить", "Delete"}, {"Провести", "Post"},
+    {"ОтменитьПроведение", "UndoPosting"}, {"УстановитьПометкуУдаления", "SetDeletionMark"},
+    {"Сохранить", "Save"}, {"Загрузить", "Load"}, {"Получить", "Get"}, {"Создать", "Create"},
+    {"НайтиПоНаименованию", "FindByDescription"}, {"СоздатьЭлемент", "CreateItem"},
+    {"СоздатьГруппу", "CreateFolder"}, {"РегистрыСведений", "InformationRegisters"},
+    {"РегистрыНакопления", "AccumulationRegisters"}, {"РегистрыБухгалтерии", "AccountingRegisters"},
+    {"РегистрыРасчета", "CalculationRegisters"}, {"Константы", "Constants"}, {"Обработки", "DataProcessors"},
+    {"Отчеты", "Reports"}, {"ХранилищеОбщихНастроек", "CommonSettingsStorage"},
+    {"ХранилищеСистемныхНастроек", "SystemSettingsStorage"}, {"ФоновыеЗадания", "BackgroundJobs"},
+    {"РегламентныеЗадания", "ScheduledJobs"}};
+
+const std::vector<std::vector<std::string>>& SynonymGroups() {
+    static const std::vector<std::vector<std::string>> groups = [] {
+        std::vector<std::vector<std::string>> out;
+        const auto add = [&out](const char* ru, const char* en) {
+            const std::string a = AllowlistKey(ru), b = AllowlistKey(en);
+            for (const auto& g : out) {
+                if (g[0] == a || g[1] == a) return;
+            }
+            out.push_back({a, b});
+        };
+        for (const GlobalProperty& p : kGlobalProperties) add(p.ru, p.en);
+        for (const MethodRule& m : kMethodRules) add(m.ru, m.en);
+        for (const NewRule& n : kNewRules) add(n.ru, n.en);
+        for (const NamePair& p : kExtraNamePairs) add(p.ru, p.en);
+        return out;
+    }();
+    return groups;
+}
+
+// `key` (an AllowlistKey) and its other spelling, when the table knows it.
+std::vector<std::string> SynonymsOf(const std::string& key) {
+    for (const auto& g : SynonymGroups()) {
+        if (g[0] == key || g[1] == key) return g;
+    }
+    return {key};
+}
 
 std::vector<DenyPattern> CompileDeny(const std::vector<std::string>& patterns) {
     std::vector<DenyPattern> out;
@@ -662,7 +711,12 @@ std::vector<DenyPattern> CompileDeny(const std::vector<std::string>& patterns) {
             if (d.method.empty()) continue;
         }
         d.key = AllowlistKey(p);
-        if (!d.key.empty()) out.push_back(std::move(d));
+        if (d.key.empty()) continue;
+        if (d.qualified) {
+            d.key_alts = SynonymsOf(d.key);
+            d.method_alts = d.prefix ? std::vector<std::string>{d.method} : SynonymsOf(d.method);
+        }
+        out.push_back(std::move(d));
     }
     return out;
 }
@@ -694,13 +748,47 @@ bool DenyMatchesName(const std::vector<DenyPattern>& deny, const std::string& na
 }
 
 // `manager . method` in the tokens: both names matched like a plain name.
-bool DenyMatchesPair(const std::vector<DenyPattern>& deny, const Token& manager, const Token& method) {
-    const std::vector<std::string> managers = FoldedKeys(manager.text, manager.mixed_script);
-    const std::vector<std::string> methods = FoldedKeys(method.text, method.mixed_script);
-    for (const DenyPattern& d : deny) {
-        if (d.qualified && KeyIs(managers, d.key, false) && KeyIs(methods, d.method, d.prefix)) return true;
+bool AnyKeyIs(const std::vector<std::string>& keys, const std::vector<std::string>& patterns, bool prefix) {
+    for (const std::string& p : patterns) {
+        if (KeyIs(keys, p, prefix)) return true;
     }
     return false;
+}
+
+bool DenyMatchesPairNames(const std::vector<DenyPattern>& deny, const std::string& manager, bool manager_mixed,
+                          const Token& method) {
+    const std::vector<std::string> managers = FoldedKeys(manager, manager_mixed);
+    const std::vector<std::string> methods = FoldedKeys(method.text, method.mixed_script);
+    for (const DenyPattern& d : deny) {
+        if (d.qualified && AnyKeyIs(managers, d.key_alts, false) && AnyKeyIs(methods, d.method_alts, d.prefix)) {
+            return true;
+        }
+    }
+    return false;
+}
+
+bool DenyMatchesPair(const std::vector<DenyPattern>& deny, const Token& manager, const Token& method) {
+    return DenyMatchesPairNames(deny, manager.text, manager.mixed_script, method);
+}
+
+bool IsManager(const std::vector<DenyPattern>& deny, const std::string& name, bool mixed) {
+    const std::vector<std::string> keys = FoldedKeys(name, mixed);
+    for (const DenyPattern& d : deny) {
+        if (d.qualified && AnyKeyIs(keys, d.key_alts, false)) return true;
+    }
+    return false;
+}
+
+// ПолучитьОбщийМодуль("X") / ОбщийМодуль("X") at token `i`: the index of its closing parenthesis, or 0.
+size_t CommonModuleByString(const std::vector<Token>& tokens, size_t i) {
+    static const std::set<std::string> names = {AllowlistKey("ПолучитьОбщийМодуль"), AllowlistKey("ОбщийМодуль"),
+                                                "GETCOMMONMODULE", "COMMONMODULE"};
+    if (i + 3 >= tokens.size() || tokens[i].kind != Bt::Identifier || names.count(AllowlistKey(tokens[i].text)) == 0) {
+        return 0;
+    }
+    return tokens[i + 1].kind == Bt::LParen && tokens[i + 2].kind == Bt::String && tokens[i + 3].kind == Bt::RParen
+               ? i + 3
+               : 0;
 }
 
 bool IsNameToken(const Token& t) { return t.kind == Bt::Identifier || t.kind == Bt::Keyword; }
@@ -710,11 +798,7 @@ bool IsNameToken(const Token& t) { return t.kind == Bt::Identifier || t.kind == 
 bool DenyAliasesManager(const std::vector<DenyPattern>& deny, const std::vector<Token>& tokens, size_t i) {
     const bool called = i + 2 < tokens.size() && tokens[i + 1].kind == Bt::Dot && IsNameToken(tokens[i + 2]);
     if (called) return false;
-    const std::vector<std::string> keys = FoldedKeys(tokens[i].text, tokens[i].mixed_script);
-    for (const DenyPattern& d : deny) {
-        if (d.qualified && KeyIs(keys, d.key, false)) return true;
-    }
-    return false;
+    return IsManager(deny, tokens[i].text, tokens[i].mixed_script);
 }
 
 bool IsBlankByte(char c) { return c == ' ' || c == '\t' || c == '\r' || c == '\n'; }
@@ -750,7 +834,17 @@ bool ManagerAliasInRawKey(const DenyPattern& d, const std::string& text) {
 bool DenyInRawKey(const std::vector<DenyPattern>& deny, const std::string& text) {
     for (const DenyPattern& d : deny) {
         if (d.qualified) {
-            if (QualifiedInRawKey(d, text) || ManagerAliasInRawKey(d, text)) return true;
+            for (const std::string& manager : d.key_alts) {
+                for (const std::string& method : d.method_alts) {
+                    DenyPattern one = d;   // one spelling of the pair at a time
+                    one.key = manager;
+                    one.method = method;
+                    if (QualifiedInRawKey(one, text)) return true;
+                }
+                DenyPattern one = d;
+                one.key = manager;
+                if (ManagerAliasInRawKey(one, text)) return true;
+            }
             continue;
         }
         for (size_t p = text.find(d.key); p != std::string::npos; p = text.find(d.key, p + 1)) {
@@ -788,6 +882,17 @@ std::vector<CodeReason> ScanDeniedEffects(const std::string& utf8, const std::ve
             if (!IsNameToken(t) || out.size() >= kMaxRisksPerClass) continue;
             const bool pair = i + 2 < tokens.size() && tokens[i + 1].kind == Bt::Dot && IsNameToken(tokens[i + 2]) &&
                               DenyMatchesPair(deny, t, tokens[i + 2]);
+            // ПолучитьОбщийМодуль("Менеджер").Метод(...): the module is the manager of a qualified entry
+            if (const size_t close = CommonModuleByString(tokens, i)) {
+                const Token& module = tokens[i + 2];
+                if (IsManager(deny, module.value, false)) {
+                    const bool called = close + 2 < tokens.size() && tokens[close + 1].kind == Bt::Dot &&
+                                        IsNameToken(tokens[close + 2]);
+                    if (!called || DenyMatchesPairNames(deny, module.value, false, tokens[close + 2])) {
+                        out.push_back(CodeReason{"C_EFFECT_DENIED", Pos{t.pos, t.line, t.col}});
+                    }
+                }
+            }
             if (pair || DenyMatchesName(deny, t.text, t.mixed_script) || DenyAliasesManager(deny, tokens, i)) {
                 out.push_back(CodeReason{"C_EFFECT_DENIED", Pos{t.pos, t.line, t.col}});
             }
