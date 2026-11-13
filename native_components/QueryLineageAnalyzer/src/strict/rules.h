@@ -89,6 +89,16 @@ inline bool IsFilterEquality(const Expr& e, const LabelFn& label, const FieldPol
     return false;
 }
 
+// The host allows oracle primitives over every protected source of the value (policy "compare_allowed"): the value is
+// attributed completely and each of its fields is allowed. The value stays protected for the output labelling.
+inline bool CoveredByCompareAllowed(const Attribution& attr, const FieldPolicy& policy) {
+    if (attr.unattributed || attr.fields.empty()) return false;
+    for (const std::string& f : attr.fields) {
+        if (!policy.CompareAllowed(f)) return false;
+    }
+    return true;
+}
+
 // True when a grouping item is also selected as is (same field path): the group key is then returned as a
 // protected value, and the group counts describe that value only. Any other protected grouping hides the key.
 inline bool GroupItemIsSelected(const Select& s, const Expr& g) {

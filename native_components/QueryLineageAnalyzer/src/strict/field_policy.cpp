@@ -84,12 +84,18 @@ void MergeField(FieldMap& fields, const std::string& key, FieldInfo info) {
         return;
     }
     it->second.cls = Stricter(it->second.cls, info.cls);
+    it->second.compare_allowed = it->second.compare_allowed && info.compare_allowed;
     it->second.refs_known = it->second.refs_known && info.refs_known;
     for (auto& ref : info.refs) it->second.refs.push_back(std::move(ref));
 }
 
 bool ParseFieldInfo(const Json& v, FieldInfo* out) {
     if (!v.is_object()) return false;
+    const auto allowed = v.find("compare_allowed");
+    if (allowed != v.end()) {
+        if (!allowed->is_boolean()) return false;
+        out->compare_allowed = allowed->get<bool>();
+    }
     const auto cls = v.find("class");
     if (cls == v.end() || !ParseClass(*cls, &out->cls)) return false;
     const auto refs = v.find("refs");
@@ -129,10 +135,25 @@ public:
             return false;
         }
         AddChangeTables(policy);
+        IndexCompareAllowed(policy);
         return true;
     }
 
 private:
+    static void IndexCompareAllowed(FieldPolicy* policy) {
+        const auto add = [policy](const FieldMap& fields) {
+            for (const auto& f : fields) {
+                if (f.second.display.empty()) continue;
+                const std::string key = NormalizeIdentifierKey(f.second.display);
+                const auto it = policy->compare_allowed_.find(key);
+                if (it == policy->compare_allowed_.end()) policy->compare_allowed_.emplace(key, f.second.compare_allowed);
+                else it->second = it->second && f.second.compare_allowed;
+            }
+        };
+        for (const auto& t : policy->tables_) add(t.second.fields);
+        for (const auto& v : policy->virtuals_) add(v.second.extra_fields);
+    }
+
     static void AddChangeTables(FieldPolicy* policy) {
         static const char* const kKinds[] = {"Справочник", "Документ", "ПланВидовХарактеристик", "ПланСчетов",
                                              "БизнесПроцесс", "Задача", "РегистрСведений", "РегистрНакопления",
@@ -264,6 +285,11 @@ FieldPolicy::Parsed FieldPolicy::FromJson(const std::string& json) {
         result.error = "Q_POLICY_JSON";
     }
     return result;
+}
+
+bool FieldPolicy::CompareAllowed(const std::string& display) const {
+    const auto it = compare_allowed_.find(NormalizeIdentifierKey(display));
+    return it != compare_allowed_.end() && it->second;
 }
 
 bool FieldPolicy::HasTable(const std::string& table) const {

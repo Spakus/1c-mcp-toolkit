@@ -143,6 +143,39 @@ TEST(StrictGate, OracleReasonsNameOperationAndField) {
     CHECK(!parse["reasons"][0].contains("op"));
 }
 
+// ---- compare_allowed ----
+
+TEST(StrictGate, CompareAllowedOpensOnlyItsOwnField) {
+    const std::vector<std::string> name_only{kNameField};
+    CHECK_EQ(V(Q(kWhere + "К.Наименование ПОДОБНО \"Аб%\"", Policy(name_only))), std::string("safe"));
+    CHECK_EQ(V(Q(kWhere + "К.Наименование > \"М\"", Policy(name_only))), std::string("safe"));
+    CHECK_EQ(V(Q(kWhere + "К.Наименование МЕЖДУ \"А\" И \"Б\"", Policy(name_only))), std::string("safe"));
+    CHECK_EQ(V(Q(kWhere + "ПОДСТРОКА(К.Наименование, 1, 1) = \"А\"", Policy(name_only))), std::string("safe"));
+    CHECK_EQ(V(Q(kWhere + "ДЛИНАСТРОКИ(К.Наименование) > 3", Policy(name_only))), std::string("safe"));
+    // another field is not opened by it
+    const Json other = Q(kWhere + "К.ИНН ПОДОБНО \"1%\"", Policy(name_only));
+    CHECK_EQ(V(other), std::string("confirm"));
+    CHECK(Oracles(other) == (std::set<std::string>{std::string("Q_LIKE_PROTECTED/like@") + kInnField}));
+    // one allowed and one not: the reason of the second remains, the first is gone
+    const Json two = Q(kWhere + "К.Наименование ПОДОБНО \"А%\" ИЛИ К.ИНН ПОДОБНО \"1%\"", Policy(name_only));
+    CHECK(Oracles(two) == (std::set<std::string>{std::string("Q_LIKE_PROTECTED/like@") + kInnField}));
+    // the row set no longer counts as protected: a count over it passes
+    CHECK_EQ(V(Q("ВЫБРАТЬ КОЛИЧЕСТВО(*) КАК К ИЗ Справочник.Контрагенты КАК К ГДЕ К.Наименование ПОДОБНО \"А%\"",
+                 Policy(name_only))), std::string("safe"));
+    // the value itself stays protected for the output labelling: a string function result leaving as a column is not open
+    CHECK_EQ(V(Q("ВЫБРАТЬ ПОДСТРОКА(К.Наименование, 1, 1) КАК Х ИЗ Справочник.Контрагенты КАК К", Policy(name_only))),
+             std::string("confirm"));
+    CHECK_EQ(V(Q("ВЫБРАТЬ К.Наименование КАК Х ИЗ Справочник.Контрагенты КАК К", Policy(name_only))), std::string("safe"));
+}
+
+TEST(StrictGate, CompareAllowedMustBeBoolean) {
+    Json p = Json::parse(kPolicy);
+    p["tables"]["Справочник.Контрагенты"]["fields"]["ИНН"]["compare_allowed"] = "yes";
+    const Json bad = Q(kWhere + "К.ИНН = \"1\"", p.dump());
+    CHECK(Has(bad, "Q_POLICY_INVALID"));
+    CHECK_EQ(V(bad), std::string("confirm"));
+}
+
 // ---- A fixes ----
 
 TEST(StrictGate, NumbersOverOpenColumnsAreOpen) {

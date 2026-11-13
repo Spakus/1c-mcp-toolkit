@@ -230,6 +230,42 @@ private:
         return it == labels_.expr.end() ? Origin::Unknown : it->second.origin;
     }
 
+    // A partial comparison of a protected value: the primitives a "compare_allowed" field may be put through.
+    static bool IsOraclePrimitive(const Expr& e) {
+        switch (e.kind) {
+            case Expr::K::Like:
+            case Expr::K::Between:
+            case Expr::K::InList: return true;
+            case Expr::K::Binary:
+                return e.text == "=" || e.text == "<>" || e.text == "<" || e.text == ">" || e.text == "<=" ||
+                       e.text == ">=";
+            default: return false;
+        }
+    }
+
+    // Some operand is tainted and every tainted operand is covered by "compare_allowed" fields.
+    bool CoveredOperands(const std::vector<FieldLabel>& operands) const {
+        bool any = false;
+        for (const FieldLabel& o : operands) {
+            if (!IsTaintedOrigin(o.origin)) continue;
+            any = true;
+            if (!CoveredByCompareAllowed(o.attr, policy_)) return false;
+        }
+        return any;
+    }
+
+    // Some argument of `e` is tainted and every tainted argument is covered by "compare_allowed" fields.
+    bool CoveredNode(const Expr& e) const {
+        bool any = false;
+        for (const ExprP& a : e.args) {
+            const auto it = a ? labels_.expr.find(a.get()) : labels_.expr.end();
+            if (it == labels_.expr.end() || !IsTaintedOrigin(it->second.origin)) continue;
+            any = true;
+            if (!CoveredByCompareAllowed(it->second.attr, policy_)) return false;
+        }
+        return any && e.subquery == nullptr;
+    }
+
     bool IsOpenBit(const Expr& e) const {
         const LabelFn label = [this](const Expr* x) { return LabelPtr(x); };
         return IsEmptinessTest(e, label) || IsFilterEquality(e, label, policy_);
@@ -242,6 +278,7 @@ private:
         // An emptiness test and a filter by equality are one open bit (rules.h): their protected operand does not taint
         // the rows.
         if (IsOpenBit(*e)) return false;
+        if (IsOraclePrimitive(*e) && CoveredNode(*e)) return false;   // "compare_allowed": the same open bit
         for (const ExprP& a : e->args) {
             if (SubtreeTainted(a)) return true;
         }
@@ -296,6 +333,7 @@ private:
         // returns one of its operands; the others yield a number, a string or a Boolean.
         std::vector<FieldLabel> operands = LabelOperands(e, scope, depth, aliases);
         if (IsOpenBit(e)) return Plain(Origin::Open, true);   // one bit (rules.h IsEmptinessTest, IsFilterEquality)
+        if (IsOraclePrimitive(e) && CoveredOperands(operands)) return Plain(Origin::Open, true);   // compare_allowed
         return Plain(DerivedFrom(operands), e.kind != Expr::K::Case || PassesNoReference(operands));
     }
 
@@ -424,6 +462,7 @@ private:
             case CallClass::Sum: return Plain(DerivedFrom(operands), true);   // a number
             case CallClass::MinMax: return Plain(DerivedFrom(operands), PassesNoReference(operands));
             case CallClass::Plain: {
+                if (IsStringLengthFunction(e.text) && CoveredOperands(operands)) return Plain(Origin::Open, true);
                 // ЕСТЬNULL returns one of its arguments; the other functions return a number, a string or a date.
                 const std::string key = NormalizeIdentifierKey(e.text);
                 const bool chooses = key == "ЕСТЬNULL" || key == "ISNULL";

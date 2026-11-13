@@ -89,8 +89,23 @@ private:
         } else {
             for (const ExprP& a : node.args) take(a.get());
         }
+        if (any && CoveredByCompareAllowed(attr, policy_)) return;
         for (const std::string& f : attr.fields) Add(code, pos, op, f);
         if (attr.unattributed || attr.fields.empty()) Add(code, pos, op);
+    }
+
+    // Every tainted operand of `node` is covered by "compare_allowed" (and there is one).
+    bool CoveredOracle(const Expr& node) const {
+        Attribution attr;
+        bool any = false;
+        for (const ExprP& a : node.args) {
+            const auto it = a ? labels_.expr.find(a.get()) : labels_.expr.end();
+            if (it == labels_.expr.end() || !Tainted(it->second.origin)) continue;
+            any = true;
+            attr.Join(it->second.attr);
+        }
+        if (node.subquery) attr.unattributed = true;
+        return any && CoveredByCompareAllowed(attr, policy_);
     }
 
     Origin LabelOf(const Expr* e) const {
@@ -478,8 +493,21 @@ private:
         }
     }
 
+    // The nodes a "compare_allowed" field may be put through: a partial comparison, and a string function.
+    static bool IsOracleNode(const Expr& e) {
+        switch (e.kind) {
+            case Expr::K::Like:
+            case Expr::K::Between:
+            case Expr::K::InList: return true;
+            case Expr::K::Binary: return e.text == "=" || IsComparison(e.text);
+            case Expr::K::Call: return IsStringFunction(e.text);
+            default: return false;
+        }
+    }
+
     void ApplyNodeRules(const Expr& e, Ctx ctx, bool item_root) {
         const bool any = AnyArgTainted(e);
+        if (any && IsOracleNode(e) && CoveredOracle(e)) return;   // the host allows comparing these fields
         switch (e.kind) {
             case Expr::K::Call: CallRules(e, ctx, item_root, any); break;
             case Expr::K::Cast:

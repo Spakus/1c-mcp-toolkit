@@ -40,6 +40,9 @@ struct FieldInfo {
     // "<Table>.<Field>" (a tabular section: "<Table>.<Section>.<Field>") spelled as the host wrote the policy; the
     // name an oracle reason reports and the key "compare_allowed" is looked up by (CompareAllowed).
     std::string display;
+    // The host lets the model compare this field in parts (ПОДОБНО, <, >, МЕЖДУ, string functions): oracle primitives
+    // over it add no reason. The value stays protected for the output labelling. Colliding names merge to false.
+    bool compare_allowed = false;
 };
 
 class FieldPolicy {
@@ -55,6 +58,10 @@ public:
     FieldClass PresentationClass(const std::string& table) const;   // Unknown if the table is missing
     ParamOrigin OriginOfParam(const std::string& name) const;       // name without '&'
     std::string ResolveVirtualBase(const std::string& vt) const;    // "" if not virtual
+    // Policy field named by its display name (FieldInfo::display, matched after normalization): the host allows oracle
+    // primitives over it. False for a name the policy does not list.
+    bool CompareAllowed(const std::string& display) const;
+
     // Normalized keys of every name the policy lists (a dot segment of a table or virtual table, a field, an extra
     // field) that mixes Latin and Cyrillic letters: real configuration names, not look-alikes (mixed_script.h).
     std::set<std::string> MixedScriptNames() const;
@@ -84,7 +91,8 @@ private:
     std::map<std::string, TableData> tables_;
     std::map<std::string, VirtualData> virtuals_;
     std::map<std::string, ParamOrigin> params_;
-    std::map<std::string, ParamOrigin> param_folds_;   // collision key (yo folded) -> the origin of its names
+    std::map<std::string, ParamOrigin> param_folds_;
+    std::map<std::string, bool> compare_allowed_;      // normalized display name -> allowed
 };
 
 // The table the host must add for `table` to resolve: "<T>" for the change table "<T>.Изменения" (the host builds T,
