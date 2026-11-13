@@ -510,6 +510,44 @@ TEST(StrictGate, QualifiedDenyEntryShapes) {
     CHECK(Rejected("."));
 }
 
+// The exact list the host builds in ЗапрещенныеДействияСтрогогоРежима (1C object module): every entry must pass the validator,
+// otherwise the whole policy is malformed and every code check answers C_POLICY_INVALID.
+TEST(StrictGate, HostDenyListIsAcceptedByThePolicyValidator) {
+    const Json deny = std::vector<std::string>{
+    "common_module_call", "typed_object_write", "УстановитьОтключениеБезопасногоРежима", "SetSafeModeDisabled",
+    "УстановитьБезопасныйРежим", "SetSafeMode", "УстановитьБезопасныйРежимРазделенияДанных",
+    "SetDataSeparationSafeMode", "УстановитьПривилегированныйРежим", "SetPrivilegedMode", "НачатьТранзакцию",
+    "BeginTransaction", "ЗафиксироватьТранзакцию", "CommitTransaction", "ОтменитьТранзакцию", "RollbackTransaction",
+    "ФоновыеЗадания", "BackgroundJobs", "РегламентныеЗадания", "ScheduledJobs", "ЗаписьЖурналаРегистрации",
+    "WriteLogEvent", "УстановитьИспользованиеСобытияЖурналаРегистрации", "SetEventLogEventUse",
+    "ОчиститьЖурналРегистрации", "ClearEventLog", "ПользователиИнформационнойБазы", "InfoBaseUsers",
+    "УстановитьМонопольныйРежим", "SetExclusiveMode", "ВнешниеОбработки", "ExternalDataProcessors", "ВнешниеОтчеты",
+    "ExternalReports", "ПодключитьВнешнююОбработку", "ДополнительныеОтчетыИОбработки",
+    "ХранилищеОбщихНастроек.Сохранить", "ХранилищеОбщихНастроек.Save", "ХранилищеОбщихНастроек.Удалить",
+    "ХранилищеОбщихНастроек.Delete", "CommonSettingsStorage.Сохранить", "CommonSettingsStorage.Save",
+    "CommonSettingsStorage.Удалить", "CommonSettingsStorage.Delete", "ХранилищеСистемныхНастроек.Сохранить",
+    "ХранилищеСистемныхНастроек.Save", "ХранилищеСистемныхНастроек.Удалить", "ХранилищеСистемныхНастроек.Delete",
+    "SystemSettingsStorage.Сохранить", "SystemSettingsStorage.Save", "SystemSettingsStorage.Удалить",
+    "SystemSettingsStorage.Delete", "ХранилищеПользовательскихНастроекОтчетов.Сохранить",
+    "ХранилищеПользовательскихНастроекОтчетов.Save", "ХранилищеПользовательскихНастроекОтчетов.Удалить",
+    "ХранилищеПользовательскихНастроекОтчетов.Delete", "ReportsUserSettingsStorage.Сохранить",
+    "ReportsUserSettingsStorage.Save", "ReportsUserSettingsStorage.Удалить", "ReportsUserSettingsStorage.Delete",
+    "ХранилищеПользовательскихНастроекДинамическихСписков.Сохранить",
+    "ХранилищеПользовательскихНастроекДинамическихСписков.Save",
+    "ХранилищеПользовательскихНастроекДинамическихСписков.Удалить",
+    "ХранилищеПользовательскихНастроекДинамическихСписков.Delete", "DynamicListsUserSettingsStorage.Сохранить",
+    "DynamicListsUserSettingsStorage.Save", "DynamicListsUserSettingsStorage.Удалить",
+    "DynamicListsUserSettingsStorage.Delete", "ХранилищеНастроекДанныхФорм.Сохранить",
+    "ХранилищеНастроекДанныхФорм.Save", "ХранилищеНастроекДанныхФорм.Удалить", "ХранилищеНастроекДанныхФорм.Delete",
+    "FormDataSettingsStorage.Сохранить", "FormDataSettingsStorage.Save", "FormDataSettingsStorage.Удалить",
+    "FormDataSettingsStorage.Delete"};
+    CHECK(!Has(C("Результат = 1;", Policy({}, &deny)), "C_POLICY_INVALID"));
+    CHECK_EQ(DenyOf(deny.get<std::vector<std::string>>(), "Результат = 1;"), std::string("safe"));
+    CHECK_EQ(DenyOf(deny.get<std::vector<std::string>>(), "ХранилищеОбщихНастроек.Сохранить(\"а\", \"б\", 1);"),
+             std::string("deny"));
+    CHECK_EQ(DenyOf(deny.get<std::vector<std::string>>(), "ПодключитьВнешнююОбработку(\"а\");"), std::string("deny"));
+}
+
 TEST(StrictGate, PlainDenyEntryDeniesAnyMentionIncludingALocalVariable) {
     const std::vector<std::string> plain{"Пользователи1"};
     CHECK_EQ(DenyOf(plain, "Пользователи1 = 1; Результат = Пользователи1;"), std::string("deny"));
