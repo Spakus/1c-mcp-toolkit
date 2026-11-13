@@ -94,6 +94,14 @@ TEST(StrictGate, NumbersOverOpenColumnsAreOpen) {
              std::string("confirm"));
 }
 
+TEST(StrictGate, MetadataMembersAndIteration) {
+    CHECK_EQ(V(C("Результат = 0; Для Каждого Р Из Метаданные.РегистрыСведений.Правила.Измерения Цикл "
+                 "Если СтрНайти(НРег(Р.Имя), \"rmq\") > 0 Тогда Результат = Результат + 1; КонецЕсли; КонецЦикла;")),
+             std::string("safe"));
+    CHECK_EQ(V(C("Мет = Метаданные.РегистрыСведений.Правила; "
+                 "Результат = Мет.Измерения.Количество() * 100 + Мет.Ресурсы.Количество();")), std::string("safe"));
+}
+
 TEST(StrictGate, KeywordAliasesStayRefused) {
     for (const char* alias : {"Есть", "И", "Истина"}) {
         CHECK(Has(Q(std::string("ВЫБРАТЬ К.Порядок КАК ") + alias + " ИЗ Справочник.Контрагенты КАК К"), "Q_PARSE_EXPECTED"));

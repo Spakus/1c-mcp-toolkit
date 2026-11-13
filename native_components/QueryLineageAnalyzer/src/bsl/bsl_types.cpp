@@ -1583,6 +1583,8 @@ private:
             element.objs = coll.objs;
         } else if (coll.ty == Ty::Array) {
             element = ElementOf(coll, Origin::Open);
+        } else if (coll.ty == Ty::MetaCollection) {
+            element = Typed(Ty::MetaObject, Origin::Open);   // configuration structure, not data
         } else if (coll.ty == Ty::Unknown) {
             Add("C_UNKNOWN_RECEIVER", s.exprs[0]->pos);
         } else {

@@ -271,6 +271,16 @@ inline constexpr PropertyRule kPropertyRules[] = {
     {Ty::Metadata, "Роли", "Roles", Ty::MetaCollection},
     {Ty::Metadata, "ПодпискиНаСобытия", "EventSubscriptions", Ty::MetaCollection},
     {Ty::Metadata, "Подсистемы", "Subsystems", Ty::MetaCollection},
+    // Members of a metadata object (Метаданные.Справочники.Файлы): configuration structure, not data.
+    {Ty::MetaObject, "Имя", "Name", Ty::String},
+    {Ty::MetaObject, "Синоним", "Synonym", Ty::String},
+    {Ty::MetaObject, "Комментарий", "Comment", Ty::String},
+    {Ty::MetaObject, "Измерения", "Dimensions", Ty::MetaCollection},
+    {Ty::MetaObject, "Ресурсы", "Resources", Ty::MetaCollection},
+    {Ty::MetaObject, "Реквизиты", "Attributes", Ty::MetaCollection},
+    {Ty::MetaObject, "ТабличныеЧасти", "TabularSections", Ty::MetaCollection},
+    {Ty::MetaObject, "Значения", "EnumValues", Ty::MetaCollection},
+    {Ty::MetaObject, "Команды", "Commands", Ty::MetaCollection},
 };
 
 // ---- Risk classes ----------------------------------------------------------------------------
