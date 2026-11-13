@@ -1192,6 +1192,131 @@
 							</Table>
 						</ChildItems>
 					</UsualGroup>
+					<UsualGroup name="ГруппаРазрешенноеСравнение" id="336">
+						<Title>
+							<v8:item>
+								<v8:lang>ru</v8:lang>
+								<v8:content>Разрешенное сравнение полей (строгий режим)</v8:content>
+							</v8:item>
+						</Title>
+						<Group>Vertical</Group>
+						<ExtendedTooltip name="ГруппаРазрешенноеСравнениеРасширеннаяПодсказка" id="337"/>
+						<ChildItems>
+							<Table name="РазрешенноеСравнениеТаблица" id="338">
+								<Representation>List</Representation>
+								<ReadOnly>true</ReadOnly>
+								<Height>5</Height>
+								<DataPath>РазрешенноеСравнение</DataPath>
+								<Title>
+									<v8:item>
+										<v8:lang>ru</v8:lang>
+										<v8:content>Поля с разрешенным сравнением</v8:content>
+									</v8:item>
+								</Title>
+								<ToolTip>
+									<v8:item>
+										<v8:lang>ru</v8:lang>
+										<v8:content>Защищенные поля, для которых человек разрешил ПОДОБНО, сравнения больше/меньше и строковые функции. Значения в ответе остаются замаскированными. Действует на всю базу; включается в строгом режиме после подтверждения; отзыв действует со следующего вызова.</v8:content>
+									</v8:item>
+								</ToolTip>
+								<ToolTipRepresentation>ShowBottom</ToolTipRepresentation>
+								<RowFilter xsi:nil="true"/>
+								<ContextMenu name="РазрешенноеСравнениеТаблицаКонтекстноеМеню" id="339"/>
+								<AutoCommandBar name="РазрешенноеСравнениеТаблицаКоманднаяПанель" id="340">
+									<Autofill>false</Autofill>
+									<ChildItems>
+										<Button name="КнопкаОтозватьРазрешениеСравнения" id="341">
+											<Type>CommandBarButton</Type>
+											<CommandName>Form.Command.ОтозватьРазрешениеСравнения</CommandName>
+											<ExtendedTooltip name="КнопкаОтозватьРазрешениеСравненияРасширеннаяПодсказка" id="342"/>
+										</Button>
+										<Button name="КнопкаПодтвердитьРазрешенияСравнения" id="343">
+											<Type>CommandBarButton</Type>
+											<CommandName>Form.Command.ПодтвердитьРазрешенияСравнения</CommandName>
+											<ExtendedTooltip name="КнопкаПодтвердитьРазрешенияСравненияРасширеннаяПодсказка" id="344"/>
+										</Button>
+									</ChildItems>
+								</AutoCommandBar>
+								<ExtendedTooltip name="РазрешенноеСравнениеТаблицаРасширеннаяПодсказка" id="345"/>
+								<SearchStringAddition name="РазрешенноеСравнениеТаблицаСтрокаПоиска" id="346">
+									<AdditionSource>
+										<Item>РазрешенноеСравнениеТаблица</Item>
+										<Type>SearchStringRepresentation</Type>
+									</AdditionSource>
+									<ContextMenu name="РазрешенноеСравнениеТаблицаСтрокаПоискаКонтекстноеМеню" id="347"/>
+									<ExtendedTooltip name="РазрешенноеСравнениеТаблицаСтрокаПоискаРасширеннаяПодсказка" id="348"/>
+								</SearchStringAddition>
+								<ViewStatusAddition name="РазрешенноеСравнениеТаблицаСостояниеПросмотра" id="349">
+									<AdditionSource>
+										<Item>РазрешенноеСравнениеТаблица</Item>
+										<Type>ViewStatusRepresentation</Type>
+									</AdditionSource>
+									<ContextMenu name="РазрешенноеСравнениеТаблицаСостояниеПросмотраКонтекстноеМеню" id="350"/>
+									<ExtendedTooltip name="РазрешенноеСравнениеТаблицаСостояниеПросмотраРасширеннаяПодсказка" id="351"/>
+								</ViewStatusAddition>
+								<SearchControlAddition name="РазрешенноеСравнениеТаблицаУправлениеПоиском" id="352">
+									<AdditionSource>
+										<Item>РазрешенноеСравнениеТаблица</Item>
+										<Type>SearchControl</Type>
+									</AdditionSource>
+									<ContextMenu name="РазрешенноеСравнениеТаблицаУправлениеПоискомКонтекстноеМеню" id="353"/>
+									<ExtendedTooltip name="РазрешенноеСравнениеТаблицаУправлениеПоискомРасширеннаяПодсказка" id="354"/>
+								</SearchControlAddition>
+								<ChildItems>
+									<InputField name="РазрешенноеСравнениеТаблицаИдПоля" id="355">
+										<DataPath>РазрешенноеСравнение.ИдПоля</DataPath>
+										<ReadOnly>true</ReadOnly>
+										<Title>
+											<v8:item>
+												<v8:lang>ru</v8:lang>
+												<v8:content>Поле</v8:content>
+											</v8:item>
+										</Title>
+										<Width>48</Width>
+										<ContextMenu name="РазрешенноеСравнениеТаблицаИдПоляКонтекстноеМеню" id="356"/>
+										<ExtendedTooltip name="РазрешенноеСравнениеТаблицаИдПоляРасширеннаяПодсказка" id="357"/>
+									</InputField>
+									<InputField name="РазрешенноеСравнениеТаблицаКто" id="358">
+										<DataPath>РазрешенноеСравнение.Кто</DataPath>
+										<ReadOnly>true</ReadOnly>
+										<Title>
+											<v8:item>
+												<v8:lang>ru</v8:lang>
+												<v8:content>Кто</v8:content>
+											</v8:item>
+										</Title>
+										<Width>20</Width>
+										<ContextMenu name="РазрешенноеСравнениеТаблицаКтоКонтекстноеМеню" id="359"/>
+										<ExtendedTooltip name="РазрешенноеСравнениеТаблицаКтоРасширеннаяПодсказка" id="360"/>
+									</InputField>
+									<InputField name="РазрешенноеСравнениеТаблицаКогда" id="361">
+										<DataPath>РазрешенноеСравнение.Когда</DataPath>
+										<ReadOnly>true</ReadOnly>
+										<Title>
+											<v8:item>
+												<v8:lang>ru</v8:lang>
+												<v8:content>Когда</v8:content>
+											</v8:item>
+										</Title>
+										<ContextMenu name="РазрешенноеСравнениеТаблицаКогдаКонтекстноеМеню" id="362"/>
+										<ExtendedTooltip name="РазрешенноеСравнениеТаблицаКогдаРасширеннаяПодсказка" id="363"/>
+									</InputField>
+									<CheckBoxField name="РазрешенноеСравнениеТаблицаПодтверждено" id="364">
+										<DataPath>РазрешенноеСравнение.Подтверждено</DataPath>
+										<ReadOnly>true</ReadOnly>
+										<Title>
+											<v8:item>
+												<v8:lang>ru</v8:lang>
+												<v8:content>Подтверждено</v8:content>
+											</v8:item>
+										</Title>
+										<ContextMenu name="РазрешенноеСравнениеТаблицаПодтвержденоКонтекстноеМеню" id="365"/>
+										<ExtendedTooltip name="РазрешенноеСравнениеТаблицаПодтвержденоРасширеннаяПодсказка" id="366"/>
+									</CheckBoxField>
+								</ChildItems>
+							</Table>
+						</ChildItems>
+					</UsualGroup>
 					<UsualGroup name="ГруппаСостояниеЗащиты" id="288">
 						<Group>Vertical</Group>
 						<ExtendedTooltip name="ГруппаСостояниеЗащитыРасширеннаяПодсказка" id="289"/>
@@ -2164,6 +2289,50 @@
 				</Column>
 			</Columns>
 		</Attribute>
+		<Attribute name="РазрешенноеСравнение" id="258">
+			<Title>
+				<v8:item>
+					<v8:lang>ru</v8:lang>
+					<v8:content>Разрешенное сравнение полей</v8:content>
+				</v8:item>
+			</Title>
+			<Type>
+				<v8:Type>v8:ValueTable</v8:Type>
+			</Type>
+			<Columns>
+				<Column name="ИдПоля" id="1">
+					<Type>
+						<v8:Type>xs:string</v8:Type>
+						<v8:StringQualifiers>
+							<v8:Length>300</v8:Length>
+							<v8:AllowedLength>Variable</v8:AllowedLength>
+						</v8:StringQualifiers>
+					</Type>
+				</Column>
+				<Column name="Кто" id="2">
+					<Type>
+						<v8:Type>xs:string</v8:Type>
+						<v8:StringQualifiers>
+							<v8:Length>100</v8:Length>
+							<v8:AllowedLength>Variable</v8:AllowedLength>
+						</v8:StringQualifiers>
+					</Type>
+				</Column>
+				<Column name="Когда" id="3">
+					<Type>
+						<v8:Type>xs:dateTime</v8:Type>
+						<v8:DateQualifiers>
+							<v8:DateFractions>DateTime</v8:DateFractions>
+						</v8:DateQualifiers>
+					</Type>
+				</Column>
+				<Column name="Подтверждено" id="4">
+					<Type>
+						<v8:Type>xs:boolean</v8:Type>
+					</Type>
+				</Column>
+			</Columns>
+		</Attribute>
 	</Attributes>
 	<Commands>
 		<Command name="Подключиться" id="1">
@@ -2285,6 +2454,24 @@
 				</v8:item>
 			</Title>
 			<Action>ПроверитьИПрименитьСтруктурныеПоля</Action>
+		</Command>
+		<Command name="ОтозватьРазрешениеСравнения" id="247">
+			<Title>
+				<v8:item>
+					<v8:lang>ru</v8:lang>
+					<v8:content>Отозвать</v8:content>
+				</v8:item>
+			</Title>
+			<Action>ОтозватьРазрешениеСравнения</Action>
+		</Command>
+		<Command name="ПодтвердитьРазрешенияСравнения" id="248">
+			<Title>
+				<v8:item>
+					<v8:lang>ru</v8:lang>
+					<v8:content>Подтвердить</v8:content>
+				</v8:item>
+			</Title>
+			<Action>ПодтвердитьРазрешенияСравнения</Action>
 		</Command>
 </Commands>
 	<Events>
