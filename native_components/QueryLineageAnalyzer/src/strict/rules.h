@@ -61,6 +61,34 @@ inline bool IsEmptinessTest(const Expr& e, const LabelFn& label) {
     return (empty(*b) && direct(*a)) || (empty(*a) && direct(*b));
 }
 
+// A filter by equality: `<field> = <literal or client parameter>`, `<>` likewise, either order, and
+// `<field> В (<literals / client parameters>)`, where the field path reads a stored protected string directly (label
+// ProtectedDirect). Equality is the normal way to find a record; the value is never returned. The analyzer labels it
+// Open and the rule engine adds no reason. A partial comparison (ПОДОБНО, <, >, МЕЖДУ) or a function over the field is
+// not covered: it is an oracle on pieces of the value.
+inline bool IsFilterEquality(const Expr& e, const LabelFn& label, const FieldPolicy& policy) {
+    const auto direct_field = [&label](const Expr* x) {
+        return x != nullptr && x->kind == Expr::K::Field && label(x) == Origin::ProtectedDirect;
+    };
+    const auto client_value = [&policy](const Expr* x) {
+        return x != nullptr && (x->kind == Expr::K::StringLit ||
+                                (x->kind == Expr::K::Param && policy.OriginOfParam(x->text) == ParamOrigin::Client));
+    };
+    if (e.kind == Expr::K::Binary && (e.text == "=" || e.text == "<>") && e.args.size() == 2) {
+        const Expr* a = e.args[0].get();
+        const Expr* b = e.args[1].get();
+        return (direct_field(a) && client_value(b)) || (direct_field(b) && client_value(a));
+    }
+    if (e.kind == Expr::K::InList && e.args.size() >= 2 && !e.subquery) {
+        if (!direct_field(e.args[0].get())) return false;
+        for (size_t i = 1; i < e.args.size(); ++i) {
+            if (!client_value(e.args[i].get())) return false;
+        }
+        return true;
+    }
+    return false;
+}
+
 // True when a grouping item is also selected as is (same field path): the group key is then returned as a
 // protected value, and the group counts describe that value only. Any other protected grouping hides the key.
 inline bool GroupItemIsSelected(const Select& s, const Expr& g) {

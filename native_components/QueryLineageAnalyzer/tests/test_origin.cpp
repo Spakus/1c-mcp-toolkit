@@ -332,7 +332,10 @@ TEST(Origin, PredicatesDeriveFromTheirOperands) {
         "А.Код МЕЖДУ 1 И 2 КАК М, А.Имя ЕСТЬ NULL КАК Н, Б.Сумма > 1 КАК С "
         "ИЗ Справочник.А КАК А, Справочник.Б КАК Б");
     CHECK_EQ(r.columns.size(), static_cast<size_t>(6));
-    for (size_t i = 0; i < 4; ++i) CHECK_EQ(r.columns.at(i).origin, Origin::Mixed);
+    CHECK_EQ(r.columns.at(0).origin, Origin::Open);   // a filter by equality is one open bit
+    CHECK_EQ(r.columns.at(1).origin, Origin::Open);
+    CHECK_EQ(r.columns.at(2).origin, Origin::Mixed);
+    CHECK_EQ(r.columns.at(3).origin, Origin::Mixed);
     CHECK_EQ(r.columns.at(4).origin, Origin::ProtectedDerived);
     CHECK_EQ(r.columns.at(5).origin, Origin::Client);
 }
@@ -352,7 +355,7 @@ TEST(Origin, InSubqueryJoinsSubqueryColumns) {
 TEST(Origin, CaseCombinesBranchesAndConditions) {
     // implicit flow: constant branches, but the condition reads a protected value
     auto flow = AnalyzeForTest(kPolicyAB,
-        "ВЫБРАТЬ ВЫБОР КОГДА А.Имя = \"x\" ТОГДА 1 ИНАЧЕ 0 КОНЕЦ КАК Х ИЗ Справочник.А КАК А");
+        "ВЫБРАТЬ ВЫБОР КОГДА А.Имя ПОДОБНО \"x%\" ТОГДА 1 ИНАЧЕ 0 КОНЕЦ КАК Х ИЗ Справочник.А КАК А");
     CHECK_EQ(FirstOrigin(flow), Origin::Mixed);
     auto simple = AnalyzeForTest(kPolicyAB,
         "ВЫБРАТЬ ВЫБОР А.Имя КОГДА \"x\" ТОГДА 1 ИНАЧЕ 0 КОНЕЦ КАК Х ИЗ Справочник.А КАК А");
@@ -465,10 +468,13 @@ TEST(Origin, FunctionsOverProtectedNeedConfirmation) {
 }
 
 TEST(Origin, EqualityRules) {
+    // equality with a literal or a client parameter is a normal filter; a pattern is an oracle
+    CHECK(AnalyzeForTest(kPolicyAB, "ВЫБРАТЬ А.Ссылка КАК С ИЗ Справочник.А КАК А ГДЕ А.Имя = \"x\"").verdict == Verdict::Safe);
+    CHECK(AnalyzeForTest(kPolicyAB, "ВЫБРАТЬ А.Ссылка КАК С ИЗ Справочник.А КАК А ГДЕ А.Имя = &П").verdict == Verdict::Safe);
     CHECK(HasReason(AnalyzeForTest(kPolicyAB,
-        "ВЫБРАТЬ А.Ссылка КАК С ИЗ Справочник.А КАК А ГДЕ А.Имя = \"x\""), "Q_EQ_LITERAL"));
+        "ВЫБРАТЬ А.Ссылка КАК С ИЗ Справочник.А КАК А ГДЕ А.Имя ПОДОБНО \"x%\""), "Q_LIKE_PROTECTED"));
     CHECK(HasReason(AnalyzeForTest(kPolicyAB,
-        "ВЫБРАТЬ А.Ссылка КАК С ИЗ Справочник.А КАК А ГДЕ А.Имя = &П"), "Q_EQ_CLIENT_PARAM"));
+        "ВЫБРАТЬ А.Ссылка КАК С ИЗ Справочник.А КАК А ГДЕ А.Имя ПОДОБНО &П"), "Q_LIKE_PROTECTED"));
     CHECK(HasReason(AnalyzeForTest(kPolicyAB,
         "ВЫБРАТЬ А.Ссылка КАК С ИЗ Справочник.А КАК А, Справочник.Б КАК Б ГДЕ А.Имя = Б.Код"), "Q_EQ_CLIENT_PARAM"));
     auto ok = AnalyzeForTest(kPolicyAB, "ВЫБРАТЬ А.Ссылка КАК С ИЗ Справочник.А КАК А ГДЕ А.Имя = &МСПТокен1");
@@ -726,7 +732,7 @@ TEST(Origin, TotalsOverOpenColumnsByReturnedColumns) {
         "ВЫБРАТЬ А.Ссылка КАК С, А.Имя КАК Нм ИЗ Справочник.А КАК А ИТОГИ ПО С"), "Q_TOTALS"));
     CHECK(HasReason(AnalyzeForTest(kPolicyAB,
         "ВЫБРАТЬ А.Ссылка КАК С, А.Имя КАК Нм ИЗ Справочник.А КАК А ИТОГИ ПО Нм"), "Q_TOTALS"));
-    CHECK(HasReason(AnalyzeForTest(kPolicyAB, q + "ГДЕ Б.СсылкаНаА.Имя = &П ИТОГИ ПО К"), "Q_TOTALS"));
+    CHECK(HasReason(AnalyzeForTest(kPolicyAB, q + "ГДЕ Б.СсылкаНаА.Имя ПОДОБНО &П ИТОГИ ПО К"), "Q_TOTALS"));
     CHECK(HasReason(AnalyzeForTest(kPolicyAB, q + "ОБЪЕДИНИТЬ ВСЕ ВЫБРАТЬ А.Ссылка, 1, А.Имя ИЗ Справочник.А КАК А "
                                               "ИТОГИ ПО К"), "Q_TOTALS"));
     CHECK(HasReason(AnalyzeForTest(kPolicyAB, "ВЫБРАТЬ Б.Нет КАК Н, Б.Сумма КАК С ИЗ Справочник.Б КАК Б ИТОГИ ПО С"),
@@ -752,7 +758,7 @@ TEST(Origin, ConditionChannels) {
     // join ON comparing a protected field with a literal
     CHECK(HasReason(AnalyzeForTest(kPolicyAB,
         "ВЫБРАТЬ Б.Сумма КАК С ИЗ Справочник.Б КАК Б ВНУТРЕННЕЕ СОЕДИНЕНИЕ Справочник.А КАК А "
-        "ПО Б.СсылкаНаА = А.Ссылка И А.Имя = \"x\""), "Q_EQ_LITERAL"));
+        "ПО Б.СсылкаНаА = А.Ссылка И А.Имя ПОДОБНО \"x%\""), "Q_LIKE_PROTECTED"));
     // HAVING with a function over a protected value
     CHECK(HasReason(AnalyzeForTest(kPolicyAB,
         "ВЫБРАТЬ А.Имя КАК Нм ИЗ Справочник.А КАК А СГРУППИРОВАТЬ ПО А.Имя "
@@ -767,15 +773,15 @@ TEST(Origin, ConditionChannels) {
         "ГДЕ ВЫБОР КОГДА А.Имя = &МСПТокен1 ТОГДА 1 ИНАЧЕ 0 КОНЕЦ = 1"), "Q_FUNC_OVER_PROTECTED"));
     // IN list of literals
     CHECK(HasReason(AnalyzeForTest(kPolicyAB,
-        "ВЫБРАТЬ А.Ссылка КАК С ИЗ Справочник.А КАК А ГДЕ А.Имя В (\"a\", \"b\")"), "Q_EQ_LITERAL"));
+        "ВЫБРАТЬ А.Ссылка КАК С ИЗ Справочник.А КАК А ГДЕ А.Имя ПОДОБНО (\"a%\")"), "Q_LIKE_PROTECTED"));
 }
 
 TEST(Origin, SubqueryRowSetTaintsItsValue) {
     // an open column of a subquery whose rows were chosen by a protected condition is not open
     auto lit = AnalyzeForTest(kPolicyAB,
         "ВЫБРАТЬ Б.Ссылка КАК С ИЗ Справочник.Б КАК Б ГДЕ Б.Сумма В "
-        "(ВЫБРАТЬ Б2.Сумма ИЗ Справочник.Б КАК Б2 ГДЕ Б2.СсылкаНаА.Имя = \"x\")");
-    CHECK(HasReason(lit, "Q_EQ_LITERAL"));
+        "(ВЫБРАТЬ Б2.Сумма ИЗ Справочник.Б КАК Б2 ГДЕ Б2.СсылкаНаА.Имя ПОДОБНО \"x%\")");
+    CHECK(HasReason(lit, "Q_LIKE_PROTECTED"));
     auto tok = AnalyzeForTest(kPolicyAB,
         "ВЫБРАТЬ Б.Ссылка КАК С ИЗ Справочник.Б КАК Б ГДЕ Б.Сумма В "
         "(ВЫБРАТЬ Б2.Сумма ИЗ Справочник.Б КАК Б2 ГДЕ Б2.СсылкаНаА.Имя = &МСПТокен1)");
@@ -863,9 +869,9 @@ TEST(Origin, VirtualTableParametersAreLabelledAgainstTheBaseTable) {
         "Q_AGGREGATE_ROWSET"));
     // literal / client-parameter equality, ordering, function over protected
     CHECK(HasReason(AnalyzeForTest(kPolicyVT,
-        "ВЫБРАТЬ О.СуммаОстаток КАК С ИЗ " + vt + "(, Контрагент.Имя = \"x\") КАК О"), "Q_EQ_LITERAL"));
+        "ВЫБРАТЬ О.СуммаОстаток КАК С ИЗ " + vt + "(, Контрагент.Имя ПОДОБНО \"x%\") КАК О"), "Q_LIKE_PROTECTED"));
     CHECK(HasReason(AnalyzeForTest(kPolicyVT,
-        "ВЫБРАТЬ О.СуммаОстаток КАК С ИЗ " + vt + "(, Комментарий = &П) КАК О"), "Q_EQ_CLIENT_PARAM"));
+        "ВЫБРАТЬ О.СуммаОстаток КАК С ИЗ " + vt + "(, Комментарий ПОДОБНО &П) КАК О"), "Q_LIKE_PROTECTED"));
     CHECK(HasReason(AnalyzeForTest(kPolicyVT,
         "ВЫБРАТЬ О.СуммаОстаток КАК С ИЗ " + vt + "(, Контрагент.Имя > \"a\") КАК О"), "Q_COMPARE_PROTECTED"));
     CHECK(HasReason(AnalyzeForTest(kPolicyVT,
@@ -874,7 +880,7 @@ TEST(Origin, VirtualTableParametersAreLabelledAgainstTheBaseTable) {
     // a subquery inside a parameter is walked with its own rules
     CHECK(HasReason(AnalyzeForTest(kPolicyVT,
         "ВЫБРАТЬ О.СуммаОстаток КАК С ИЗ " + vt + "(, Контрагент В (ВЫБРАТЬ А.Ссылка ИЗ Справочник.А КАК А "
-        "ГДЕ А.Имя = \"x\")) КАК О"), "Q_EQ_LITERAL"));
+        "ГДЕ А.Имя ПОДОБНО \"x%\")) КАК О"), "Q_LIKE_PROTECTED"));
     // a protected value that is not a condition
     CHECK(HasReason(AnalyzeForTest(kPolicyVT,
         "ВЫБРАТЬ О.СуммаОстаток КАК С ИЗ " + vt + "(&МСПТокен1) КАК О"), "Q_VT_PARAM"));

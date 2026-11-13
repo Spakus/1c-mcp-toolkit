@@ -229,7 +229,7 @@ TEST(BslTaint, ScalarArithmeticTypes) {
 TEST(BslTaint, ImplicitFlowOnProtectedCondition) {
     auto r = CheckCodeForTest(kPolicyAB,
         "З = Новый Запрос(\"ВЫБРАТЬ А.Имя КАК Имя ИЗ Справочник.А КАК А\"); В = З.Выполнить().Выбрать(); Н = 0;\n"
-        "Пока В.Следующий() Цикл Если В.Имя = \"x\" Тогда Н = Н + 1; КонецЕсли; КонецЦикла; Результат = Н;");
+        "Пока В.Следующий() Цикл Если В.Имя > \"x\" Тогда Н = Н + 1; КонецЕсли; КонецЦикла; Результат = Н;");
     CHECK(HasCodeReason(r, "C_IMPLICIT_FLOW"));
 }
 
@@ -284,7 +284,7 @@ const FieldPolicy kPolicyOpenPresentation = ParsePolicyOrDie(R"({
 
 TEST(BslTaint, OperatorsOverProtectedNeedConfirmation) {
     // A comparison is a dictionary oracle even without a branch.
-    CHECK(Denied(WithTable("Результат = Т[0].Имя = \"Иванов\";"), "C_FUNC_OVER_PROTECTED"));
+    CHECK(Denied(WithTable("Результат = Т[0].Имя > \"Иванов\";"), "C_FUNC_OVER_PROTECTED"));
     CHECK(Denied(WithTable("Результат = Т[0].Имя + \"x\";"), "C_FUNC_OVER_PROTECTED"));
     CHECK(Denied(WithTable("Итог = 0; Итог = Итог + Т[0].Имя; Результат = Итог;"), "C_FUNC_OVER_PROTECTED"));
     CHECK(Denied(WithTable("Результат = Не Т[0].Имя;"), "C_FUNC_OVER_PROTECTED"));
@@ -319,14 +319,14 @@ TEST(BslTaint, KeysAndIndexesOverProtected) {
 }
 
 TEST(BslTaint, ImplicitFlowChannels) {
-    CHECK(Denied(WithTable("Н = 0; Если Ложь Тогда Н = 1; ИначеЕсли Т[0].Имя = \"x\" Тогда Н = 2; КонецЕсли; Результат = Н;"),
+    CHECK(Denied(WithTable("Н = 0; Если Ложь Тогда Н = 1; ИначеЕсли Т[0].Имя > \"x\" Тогда Н = 2; КонецЕсли; Результат = Н;"),
                  "C_IMPLICIT_FLOW"));
-    CHECK(Denied(WithTable("Результат = ?(Т[0].Имя = \"x\", 1, 0);"), "C_IMPLICIT_FLOW"));
-    CHECK(Denied(WithTable("С = Новый Структура; Л = Т[0].Имя = \"x\" И С.Свойство(\"К\", Х); Результат = 1;"),
+    CHECK(Denied(WithTable("Результат = ?(Т[0].Имя > \"x\", 1, 0);"), "C_IMPLICIT_FLOW"));
+    CHECK(Denied(WithTable("С = Новый Структура; Л = Т[0].Имя > \"x\" И С.Свойство(\"К\", Х); Результат = 1;"),
                  "C_IMPLICIT_FLOW"));
-    CHECK(Denied(WithTable("Н = 0; Пока Т[0].Имя = \"x\" Цикл Н = 1; Прервать; КонецЦикла; Результат = Н;"),
+    CHECK(Denied(WithTable("Н = 0; Пока Т[0].Имя > \"x\" Цикл Н = 1; Прервать; КонецЦикла; Результат = Н;"),
                  "C_IMPLICIT_FLOW"));
-    CHECK(Denied(WithTable("М = Т.ВыгрузитьКолонку(\"Имя\"); Для Каждого Э Из М Цикл Если Э = \"x\" Тогда Н = 1; КонецЕсли;\n"
+    CHECK(Denied(WithTable("М = Т.ВыгрузитьКолонку(\"Имя\"); Для Каждого Э Из М Цикл Если Э > \"x\" Тогда Н = 1; КонецЕсли;\n"
                            "КонецЦикла; Результат = 1;"), "C_IMPLICIT_FLOW"));
     // A Попытка body that operates on protected data: the Исключение block depends on it.
     CHECK(Denied(WithTable("Попытка Х = Число(Т[0].Имя); Исключение Х = 0; КонецПопытки; Результат = Х;"), "C_IMPLICIT_FLOW"));
@@ -335,7 +335,7 @@ TEST(BslTaint, ImplicitFlowChannels) {
 
 TEST(BslTaint, PcTaintsAssignmentsAndMutations) {
     const auto r = CheckCodeForTest(kPolicyAB,
-        WithTable("Н = 0; М = Новый Массив; Если Т[0].Имя = \"x\" Тогда Н = 1; М.Добавить(1); КонецЕсли;\n"
+        WithTable("Н = 0; М = Новый Массив; Если Т[0].Имя > \"x\" Тогда Н = 1; М.Добавить(1); КонецЕсли;\n"
                   "Результат = Новый Структура(\"Н, М\", Н, М.Количество());"));
     CHECK(HasCodeReason(r, "C_IMPLICIT_FLOW"));
     CHECK(IsTainted(r.result_label));
@@ -344,7 +344,7 @@ TEST(BslTaint, PcTaintsAssignmentsAndMutations) {
 TEST(BslTaint, AliasesShareCollectionContents) {
     // Д and М are one array: data added through Д is seen through М.
     CHECK(Denied(WithTable("М = Новый Массив; Д = М; Д.Добавить(Т[0].Имя);\n"
-                           "Для Каждого Э Из М Цикл Если Э = \"x\" Тогда Н = 1; КонецЕсли; КонецЦикла; Результат = 1;"),
+                           "Для Каждого Э Из М Цикл Если Э > \"x\" Тогда Н = 1; КонецЕсли; КонецЦикла; Результат = 1;"),
                  "C_IMPLICIT_FLOW"));
     // Результат taken before the mutation still carries it.
     const auto r = CheckCodeForTest(kPolicyAB, WithTable("М = Новый Массив; Результат = М; М.Добавить(Т[0].Имя);"));
@@ -376,7 +376,7 @@ TEST(BslTaint, LoopHeadJoinsEveryAssignment) {
 TEST(BslTaint, DereferenceUsesFieldPolicy) {
     CHECK(Safe(WithTable("Результат = Т[0].С.Имя;")));
     CHECK(Safe(WithTable("Результат = Т[0].С.Ссылка.УникальныйИдентификатор();")));
-    CHECK(Denied(WithTable("Если Т[0].С.Код = \"1\" Тогда Н = 1; КонецЕсли; Результат = 1;"), "C_IMPLICIT_FLOW"));
+    CHECK(Denied(WithTable("Если Т[0].С.Код > \"1\" Тогда Н = 1; КонецЕсли; Результат = 1;"), "C_IMPLICIT_FLOW"));
     CHECK(Denied(WithTable("Результат = Т[0].С.Нет;"), "C_UNKNOWN_MEMBER"));
     const auto r = CheckCodeForTest(kPolicyAB, WithTable("Результат = Т[0].С.Имя;"));
     CHECK_EQ(r.result_label, Origin::ProtectedDirect);
@@ -384,9 +384,10 @@ TEST(BslTaint, DereferenceUsesFieldPolicy) {
 
 TEST(BslTaint, QueryParametersFromCode) {
     const std::string q2 = "З2 = Новый Запрос(\"ВЫБРАТЬ А.Ссылка КАК С ИЗ Справочник.А КАК А ГДЕ А.Имя = &П\");\n";
-    // A client value compared with a protected field: the dictionary oracle of the query path.
-    CHECK(Denied(q2 + "З2.УстановитьПараметр(\"П\", \"Иванов\"); Результат = З2.Выполнить().Выгрузить();",
-                 "Q_EQ_CLIENT_PARAM"));
+    // A client value compared for equality with a protected field is a normal filter; a pattern is not.
+    CHECK(Safe(q2 + "З2.УстановитьПараметр(\"П\", \"Иванов\"); Результат = З2.Выполнить().Выгрузить();"));
+    CHECK(Denied("З3 = Новый Запрос(\"ВЫБРАТЬ А.Ссылка КАК С ИЗ Справочник.А КАК А ГДЕ А.Имя ПОДОБНО &П\");\n"
+                 "З3.УстановитьПараметр(\"П\", \"Ив%\"); Результат = З3.Выполнить().Выгрузить();", "Q_LIKE_PROTECTED"));
     // A protected value from another query, or an issued token, is compared with protected data: fine.
     CHECK(Safe(WithTable(q2 + "З2.УстановитьПараметр(\"П\", Т[0].Имя); Результат = З2.Выполнить().Выгрузить();")));
     CHECK(Safe(q2 + "З2.УстановитьПараметр(\"П\", \"[STR-00001]\"); Результат = З2.Выполнить().Выгрузить();", OneToken()));
@@ -423,8 +424,8 @@ TEST(BslTaint, QueryReasonsCanonicalAndMissingTables) {
     CHECK_EQ(missing.missing_tables.count("Справочник.Нет"), static_cast<size_t>(1));
     // A query reason is reported at the text's position in the code.
     const auto bad = CheckCodeForTest(kPolicyAB,
-        "З = Новый Запрос(\"ВЫБРАТЬ А.Ссылка КАК С ИЗ Справочник.А КАК А ГДЕ А.Имя = \"\"x\"\"\"); Результат = 1;");
-    CHECK(HasCodeReason(bad, "Q_EQ_LITERAL"));
+        "З = Новый Запрос(\"ВЫБРАТЬ А.Ссылка КАК С ИЗ Справочник.А КАК А ГДЕ А.Имя ПОДОБНО \"\"x%\"\"\"); Результат = 1;");
+    CHECK(HasCodeReason(bad, "Q_LIKE_PROTECTED"));
 }
 
 TEST(BslTaint, BoundTokens) {
@@ -564,12 +565,12 @@ TEST(BslTaint, UnloadingAnUnknownColumnIsRefused) {
 
 TEST(BslTaint, ConditionalLoopExitTaintsWhatTheLoopLeaves) {
     const auto b = CheckCodeForTest(kPolicyAB,
-        WithTable("Н = 0; Для Каждого Стр Из Т Цикл Если Стр.Имя = \"x\" Тогда Прервать; КонецЕсли; Н = Н + 1;\n"
+        WithTable("Н = 0; Для Каждого Стр Из Т Цикл Если Стр.Имя > \"x\" Тогда Прервать; КонецЕсли; Н = Н + 1;\n"
                   "КонецЦикла; Результат = Н;"));
     CHECK(HasCodeReason(b, "C_IMPLICIT_FLOW"));
     CHECK(IsTainted(b.result_label));
     const auto c = CheckCodeForTest(kPolicyAB,
-        WithTable("Н = 0; Для Каждого Стр Из Т Цикл Если Стр.Имя = \"x\" Тогда Продолжить; КонецЕсли; Н = Н + 1;\n"
+        WithTable("Н = 0; Для Каждого Стр Из Т Цикл Если Стр.Имя > \"x\" Тогда Продолжить; КонецЕсли; Н = Н + 1;\n"
                   "КонецЦикла; Результат = Н;"));
     CHECK(IsTainted(c.result_label));
     // An exit under an open condition taints nothing.
@@ -866,8 +867,8 @@ TEST(BslTaint, ChainOnNewQuery) {
     CHECK(Denied("Результат = Новый Запрос(\"ВЫБРАТЬ 1\").Выполнить().Выгрузить()[0][0];", "C_UNKNOWN_INDEX"));
     CHECK(Denied("Т = Новый Массив; Т.Добавить(\"ВЫБРАТЬ 1\"); Результат = Новый Запрос(Т[0]).Выполнить().Выгрузить();", "C_DYNAMIC_QUERY"));
     CHECK(Denied("Результат = Новый Запрос(\"ВЫБРАТЬ 1\").Текст;", "C_UNKNOWN_MEMBER"));
-    CHECK(Denied("Результат = Новый Запрос(\"ВЫБРАТЬ А.Имя КАК Имя ИЗ Справочник.А КАК А ГДЕ А.Имя = \"\"x\"\"\").Выполнить()"
-                 ".Выгрузить();", "Q_EQ_LITERAL"));
+    CHECK(Denied("Результат = Новый Запрос(\"ВЫБРАТЬ А.Имя КАК Имя ИЗ Справочник.А КАК А ГДЕ А.Имя ПОДОБНО \"\"x%\"\"\").Выполнить()"
+                 ".Выгрузить();", "Q_LIKE_PROTECTED"));
     // A chain that ends on the Запрос itself is an escape like any other use of it as a value.
     CHECK(Denied("Х = Новый Массив; Х.Добавить(Новый Запрос(\"ВЫБРАТЬ 1\")); Результат = 1;", "C_QUERY_ESCAPES"));
 }
@@ -948,11 +949,13 @@ TEST(BslTaint, EmptinessTestIsOneOpenBit) {
     CHECK(Safe(pre + "Результат = \"\" <> Т[0].Имя;"));
     CHECK(Safe(pre + "Результат = ПустаяСтрока(Т[0].Имя);"));
     CHECK(Safe(pre + "Н = 0; Для Каждого Стр Из Т Цикл Если Стр.Имя <> \"\" Тогда Н = Н + 1; КонецЕсли; КонецЦикла; Результат = Н;"));
-    CHECK(Denied(pre + "Результат = Т[0].Имя = \"x\";", "C_FUNC_OVER_PROTECTED"));
+    CHECK(Denied(pre + "Результат = Т[0].Имя > \"x\";", "C_FUNC_OVER_PROTECTED"));
     CHECK(Denied(pre + "Результат = Сред(Т[0].Имя, 5) = \"\";", "C_FUNC_OVER_PROTECTED"));
     CHECK(Denied(pre + "Результат = ПустаяСтрока(Сред(Т[0].Имя, 5));", "C_FUNC_OVER_PROTECTED"));
     CHECK(Denied(pre + "Результат = Т[0].Имя > \"\";", "C_FUNC_OVER_PROTECTED"));
-    CHECK(Denied(pre + "Результат = Т[0].Имя <> \"x\";", "C_FUNC_OVER_PROTECTED"));
+    CHECK(Safe(pre + "Результат = Т[0].Имя <> \"x\";"));   // a filter by equality is one open bit
+    CHECK(Safe(pre + "Если Т[0].Имя = \"x\" Тогда Результат = 1; Иначе Результат = 0; КонецЕсли;"));
+    CHECK(Denied(pre + "Результат = Лев(Т[0].Имя, 1) = \"x\";", "C_FUNC_OVER_PROTECTED"));   // a piece of the value
     CHECK(Safe(pre + "Результат = ЗначениеЗаполнено(Т[0].Имя);"));
     CHECK(Denied(pre + "Результат = ЗначениеЗаполнено(Сред(Т[0].Имя, 5));", "C_FUNC_OVER_PROTECTED"));
 }

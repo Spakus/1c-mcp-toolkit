@@ -83,6 +83,44 @@ const std::string kCode =
 
 }  // namespace
 
+// ---- equality is a normal filter ----
+
+TEST(StrictGate, EqualityFiltersPassWithoutWindow) {
+    for (const char* cond : {"К.ИНН = \"123\"", "К.ИНН <> \"123\"", "\"123\" = К.ИНН", "К.ИНН = &П",
+                             "К.Наименование В (\"а\", \"б\")", "К.Наименование В (&П, \"б\")"}) {
+        CHECK_EQ(V(Q(kWhere + cond)), std::string("safe"));
+    }
+    // a count over rows chosen by equality is the same bit as the rows themselves
+    CHECK_EQ(V(Q("ВЫБРАТЬ КОЛИЧЕСТВО(*) КАК К ИЗ Справочник.Контрагенты КАК К ГДЕ К.ИНН = \"1\"")), std::string("safe"));
+    // in code
+    CHECK_EQ(V(C(kCode + "Если Р.Инн = \"123\" Тогда Результат = 1; Иначе Результат = 0; КонецЕсли;")), std::string("safe"));
+    CHECK_EQ(V(C(kCode + "Если Р.Инн <> \"123\" Тогда Результат = 1; Иначе Результат = 0; КонецЕсли;")), std::string("safe"));
+}
+
+// A loop must not enumerate guesses: only constant client text is an equality filter in code.
+TEST(StrictGate, EqualityWithComputedClientTextStaysUnderWindow) {
+    const std::string loop = "Для Н = 1 По 99999 Цикл К = \"А\" + Строка(Н); Если Р.Инн = К Тогда Результат = Н; КонецЕсли; КонецЦикла;";
+    CHECK_EQ(V(C(kCode + "Результат = 0;\n" + loop)), std::string("confirm"));
+    CHECK_EQ(V(C(kCode + "К = \"А\" + \"Б\"; Если Р.Инн = К Тогда Результат = 1; Иначе Результат = 0; КонецЕсли;")),
+             std::string("safe"));   // folded literals are one guess in the text
+}
+
+TEST(StrictGate, PiecewiseComparisonsStayUnderWindow) {
+    CHECK(Has(Q(kWhere + "К.Наименование ПОДОБНО \"Аб%\""), "Q_LIKE_PROTECTED"));
+    CHECK(Has(Q(kWhere + "К.Наименование > \"М\""), "Q_COMPARE_PROTECTED"));
+    CHECK(Has(Q(kWhere + "К.Наименование МЕЖДУ \"А\" И \"Б\""), "Q_COMPARE_PROTECTED"));
+    CHECK(Has(Q(kWhere + "ПОДСТРОКА(К.Наименование, 1, 1) = \"А\""), "Q_FUNC_OVER_PROTECTED"));
+    // equality with a column of another table is a join key, not a filter by a client value
+    CHECK(Has(Q("ВЫБРАТЬ К.Ссылка КАК С ИЗ Справочник.Контрагенты КАК К ВНУТРЕННЕЕ СОЕДИНЕНИЕ Справочник.Группы КАК Г "
+                "ПО К.Наименование = Г.Наименование"), "Q_EQ_CLIENT_PARAM"));
+    // in code: a piece of the value, a range comparison, a string function whose result leaves as a number
+    CHECK_EQ(V(C(kCode + "Если Лев(Р.Имя, 1) = \"А\" Тогда Результат = 1; Иначе Результат = 0; КонецЕсли;")),
+             std::string("confirm"));
+    CHECK_EQ(V(C(kCode + "Если Р.Имя > \"М\" Тогда Результат = 1; Иначе Результат = 0; КонецЕсли;")), std::string("confirm"));
+    CHECK_EQ(V(C(kCode + "Результат = СтрДлина(Р.Имя);")), std::string("confirm"));
+    CHECK_EQ(V(C(kCode + "Результат = КодСимвола(Сред(Р.Имя, 1, 1));")), std::string("confirm"));
+}
+
 // ---- A fixes ----
 
 TEST(StrictGate, NumbersOverOpenColumnsAreOpen) {

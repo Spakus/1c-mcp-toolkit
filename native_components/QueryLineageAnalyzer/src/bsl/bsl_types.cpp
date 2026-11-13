@@ -1363,6 +1363,20 @@ private:
                (empty(*e.args[0]) && ValueLabel(b) == Origin::ProtectedDirect);
     }
 
+    // A filter by equality: `x = "text"` / `x <> "text"`, either order, where x is a direct protected
+    // read (label ProtectedDirect) and the other side is a client string (a literal, or a value built only from
+    // client literals, folded constant text). One open bit; the value is never returned. Not part of a query text.
+    bool IsFilterEquality(const Expr& e, const VType& a, const VType& b) const {
+        if (in_query_text_ > 0 || e.args.size() != 2) return false;
+        // Constant text only: a value computed from client pieces (`"А" + Строка(i)` in a loop) would let a loop
+        // enumerate guesses and recover the value; a literal, or a fold of literals, is one guess in the text.
+        const auto client_string = [this](const VType& v) {
+            return v.ty == Ty::String && ValueLabel(v) == Origin::Client && v.text.has_value();
+        };
+        return (ValueLabel(a) == Origin::ProtectedDirect && client_string(b)) ||
+               (ValueLabel(b) == Origin::ProtectedDirect && client_string(a));
+    }
+
     VType EvalBinary(const Expr& e) {
         const VType a = Eval(*e.args[0]);
         const std::string& op = e.text;
@@ -1381,7 +1395,9 @@ private:
         } else {
             b = Eval(*e.args[1]);
         }
-        if ((op == "=" || op == "<>") && IsEmptinessTest(e, a, b)) return Typed(Ty::Boolean, Origin::Open);
+        if ((op == "=" || op == "<>") && (IsEmptinessTest(e, a, b) || IsFilterEquality(e, a, b))) {
+            return Typed(Ty::Boolean, Origin::Open);
+        }
         std::optional<Origin> input = ValueLabel(a);
         JoinInto(input, ValueLabel(b));
         if (op == "+" && a.ty != Ty::Number) {

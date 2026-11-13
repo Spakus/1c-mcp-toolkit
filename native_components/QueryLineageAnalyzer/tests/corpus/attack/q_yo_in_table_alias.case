@@ -1,6 +1,6 @@
 // kind: query
 // expect: confirm
-// reason: Q_EQ_LITERAL
+// reason: Q_RESOLVE_AMBIGUOUS_NAME
 // class: parser
 ВЫБРАТЬ Ёж.Ссылка КАК Объект
 ИЗ Справочник.Контрагенты КАК Еж

@@ -99,7 +99,7 @@ TEST(CheckQuery, ParseFailureCarriesCodeAndPosition) {
 
 TEST(CheckQuery, ReasonsDoNotEchoClientText) {
     auto j = nlohmann::json::parse(CheckQueryImpl(
-        "ВЫБРАТЬ А.Имя ИЗ Справочник.А КАК А ГДЕ А.Имя = \"СекретЗначение\"", kPolicyABJson));
+        "ВЫБРАТЬ А.Имя ИЗ Справочник.А КАК А ГДЕ А.Имя ПОДОБНО \"СекретЗначение%\"", kPolicyABJson));
     CHECK_EQ(j["verdict"].get<std::string>(), std::string("confirm"));
     CHECK(j["reasons"].size() > 0);
     CHECK(j["reasons"].dump().find("СекретЗначение") == std::string::npos);
@@ -147,9 +147,9 @@ TEST(CheckQuery, SameTokenLiteralTwiceIsOneParameter) {
 TEST(CheckQuery, TokenInsideLongerOrUnissuedLiteralStaysLiteral) {
     const std::string policy = TokenPolicy("{}");
     for (const char* literal : {"\"x[str-00001]\"", "\"[str-00001] \"", "\"[str-09999]\""}) {
-        auto j = Check(std::string(kSelectA) + "А.Имя = " + literal, policy);
+        auto j = Check(std::string(kSelectA) + "А.Имя ПОДОБНО " + literal, policy);
         CHECK_EQ(j["verdict"].get<std::string>(), std::string("confirm"));
-        CHECK(HasCode(j, "Q_EQ_LITERAL"));
+        CHECK(HasCode(j, "Q_LIKE_PROTECTED"));
         CHECK(j["canonical"].get<std::string>().find("&МСПТокен") == std::string::npos);
     }
 }
@@ -258,15 +258,15 @@ TEST(CheckQuery, TokenParamOfTheTokenOriginAgrees) {
 
 // A token parameter whose index the table does not list is an ordinary parameter: its "params" origin holds.
 TEST(CheckQuery, TokenParamWithoutTableEntryKeepsParamsOrigin) {
-    auto client = Check(std::string(kSelectA) + "А.Имя = &МСПТокен3", TokenPolicy(R"({"МСПТокен3": "client"})"));
+    auto client = Check(std::string(kSelectA) + "А.Имя ПОДОБНО &МСПТокен3", TokenPolicy(R"({"МСПТокен3": "client"})"));
     CHECK_EQ(client["verdict"].get<std::string>(), std::string("confirm"));
-    CHECK(HasCode(client, "Q_EQ_CLIENT_PARAM"));
+    CHECK(HasCode(client, "Q_LIKE_PROTECTED"));
 
     nlohmann::json p = nlohmann::json::parse(kPolicyABJson);
     p["params"] = nlohmann::json::parse(R"({"МСПТокен1": "client"})");
-    auto no_table = Check(std::string(kSelectA) + "А.Имя = &МСПТокен1", p.dump());
+    auto no_table = Check(std::string(kSelectA) + "А.Имя ПОДОБНО &МСПТокен1", p.dump());
     CHECK_EQ(no_table["verdict"].get<std::string>(), std::string("confirm"));
-    CHECK(HasCode(no_table, "Q_EQ_CLIENT_PARAM"));
+    CHECK(HasCode(no_table, "Q_LIKE_PROTECTED"));
 
     auto missing = Check(std::string(kSelectA) + "А.Имя = &МСПТокен3", TokenPolicy("{}"));
     CHECK_EQ(missing["verdict"].get<std::string>(), std::string("confirm"));
@@ -300,7 +300,7 @@ TEST(CheckQuery, MalformedTokenTableIsPolicyInvalid) {
 // Query texts in client code are checked without a token table: a token literal there stays a literal (the code
 // checker refuses it as C_TOKEN_IN_QUERY).
 TEST(CheckQuery, PolicyOnlyCheckBindsNoTokens) {
-    const auto r = CheckQueryWithPolicy(std::string(kSelectA) + "А.Имя = \"[str-00001]\"", kPolicyAB);
+    const auto r = CheckQueryWithPolicy(std::string(kSelectA) + "А.Имя ПОДОБНО \"[str-00001]\"", kPolicyAB);
     CHECK_EQ(r.verdict, std::string("confirm"));
     CHECK(r.canonical.find("&МСПТокен") == std::string::npos);
 }
@@ -601,8 +601,8 @@ TEST(CheckQuery, ExchangePlanChangeTable) {
                         kPolicyABJson),
                   "Q_ORDER_PROTECTED"));
     // Fields of the base keep their class.
-    CHECK(HasCode(Check("ВЫБРАТЬ Изм.Ссылка КАК С ИЗ Справочник.А.Изменения КАК Изм ГДЕ Изм.Имя = \"x\"", kPolicyABJson),
-                  "Q_EQ_LITERAL"));
+    CHECK(HasCode(Check("ВЫБРАТЬ Изм.Ссылка КАК С ИЗ Справочник.А.Изменения КАК Изм ГДЕ Изм.Имя ПОДОБНО \"x%\"", kPolicyABJson),
+                  "Q_LIKE_PROTECTED"));
     // A table the policy does not have is still missing, and the host is asked for the base it can build;
     // ДЛЯ ИЗМЕНЕНИЯ is still the clause.
     const nlohmann::json missing = Check("ВЫБРАТЬ КОЛИЧЕСТВО(*) КАК К ИЗ Справочник.Нет.Изменения КАК Изм", kPolicyABJson);
@@ -645,7 +645,8 @@ TEST(CheckQuery, EmptinessTestIsOneOpenBit) {
     CHECK_EQ(verdict(std::string(kSelectA) + "А.Имя <> \"\""), std::string("safe"));
     CHECK_EQ(verdict("ВЫБРАТЬ А.Имя = \"\" КАК Пусто ИЗ Справочник.А КАК А"), std::string("safe"));
     CHECK_EQ(verdict("ВЫБРАТЬ КОЛИЧЕСТВО(*) КАК К ИЗ Справочник.А КАК А ГДЕ \"\" = А.Имя"), std::string("safe"));
-    CHECK(HasCode(Check(std::string(kSelectA) + "А.Имя = \"x\"", kPolicyABJson), "Q_EQ_LITERAL"));
+    CHECK_EQ(verdict(std::string(kSelectA) + "А.Имя = \"x\""), std::string("safe"));   // equality is a normal filter
+    CHECK(HasCode(Check(std::string(kSelectA) + "А.Имя ПОДОБНО \"x%\"", kPolicyABJson), "Q_LIKE_PROTECTED"));
     CHECK(HasCode(Check(std::string(kSelectA) + "ПОДСТРОКА(А.Имя, 5, 1) = \"\"", kPolicyABJson), "Q_COMPARE_PROTECTED"));
     CHECK(HasCode(Check(std::string(kSelectA) + "А.Имя > \"\"", kPolicyABJson), "Q_COMPARE_PROTECTED"));
     CHECK(HasCode(Check(std::string(kSelectA) + "А.Имя ПОДОБНО \"\"", kPolicyABJson), "Q_LIKE_PROTECTED"));

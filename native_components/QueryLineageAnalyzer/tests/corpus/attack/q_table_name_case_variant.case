@@ -1,7 +1,7 @@
 // kind: query
 // expect: confirm
-// reason: Q_EQ_LITERAL
+// reason: Q_COMPARE_PROTECTED
 // class: parser
 ВЫБРАТЬ ФизическиеЛица.ФИО КАК Поле
 ИЗ справочник.физическиелица КАК ФизическиеЛица
-ГДЕ ФизическиеЛица.ФИО = "x"
+ГДЕ ФизическиеЛица.ФИО > "x"

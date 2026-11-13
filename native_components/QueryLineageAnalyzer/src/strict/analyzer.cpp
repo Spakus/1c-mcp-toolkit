@@ -231,14 +231,15 @@ private:
 
     bool IsOpenBit(const Expr& e) const {
         const LabelFn label = [this](const Expr* x) { return LabelPtr(x); };
-        return IsEmptinessTest(e, label);
+        return IsEmptinessTest(e, label) || IsFilterEquality(e, label, policy_);
     }
 
     bool SubtreeTainted(const ExprP& e) const {
         if (!e) return false;
         const auto it = labels_.expr.find(e.get());
         if (it != labels_.expr.end() && IsTaintedOrigin(it->second.origin)) return true;
-        // An emptiness test is one open bit (rules.h IsEmptinessTest): its protected operand does not taint the rows.
+        // An emptiness test and a filter by equality are one open bit (rules.h): their protected operand does not taint
+        // the rows.
         if (IsOpenBit(*e)) return false;
         for (const ExprP& a : e->args) {
             if (SubtreeTainted(a)) return true;
@@ -285,7 +286,7 @@ private:
         // Unary, Binary, Case, InList, InSubquery, InHierarchy, Between, Like, IsNullTest, RefsTest, Row. Only ВЫБОР
         // returns one of its operands; the others yield a number, a string or a Boolean.
         std::vector<FieldLabel> operands = LabelOperands(e, scope, depth, aliases);
-        if (IsOpenBit(e)) return Plain(Origin::Open, true);   // one bit, filled or not (rules.h IsEmptinessTest)
+        if (IsOpenBit(e)) return Plain(Origin::Open, true);   // one bit (rules.h IsEmptinessTest, IsFilterEquality)
         return Plain(DerivedFrom(operands), e.kind != Expr::K::Case || PassesNoReference(operands));
     }
 

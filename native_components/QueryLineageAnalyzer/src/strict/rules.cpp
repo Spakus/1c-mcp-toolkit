@@ -511,7 +511,7 @@ private:
 
     bool IsOpenBitNode(const Expr& e) const {
         const LabelFn label = [this](const Expr* x) { return LabelOf(x); };
-        return IsEmptinessTest(e, label);
+        return IsEmptinessTest(e, label) || IsFilterEquality(e, label, policy_);
     }
 
     void BinaryRules(const Expr& e, Ctx ctx, bool any) {
@@ -538,6 +538,7 @@ private:
             Add("Q_UNKNOWN_EXPR", e.pos);
             return;
         }
+        if (IsOpenBitNode(e)) return;
         const Origin l0 = LabelOf(e.args[0].get());
         for (size_t i = 1; i < e.args.size(); ++i) {
             if (!e.args[i]) continue;
