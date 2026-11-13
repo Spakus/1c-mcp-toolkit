@@ -422,8 +422,9 @@ TEST(Origin, CastOfReferenceToNonReferenceTypeFailsClosed) {
 }
 
 TEST(Origin, TypeOfDependsOnOperandOrigin) {
+    // The type of a value is not stored data.
     CHECK_EQ(FirstOrigin(AnalyzeForTest(kPolicyAB, "ВЫБРАТЬ ТИПЗНАЧЕНИЯ(А.Имя) КАК Х ИЗ Справочник.А КАК А")),
-             Origin::ProtectedDerived);
+             Origin::Open);
     CHECK_EQ(FirstOrigin(AnalyzeForTest(kPolicyAB, "ВЫБРАТЬ ТИПЗНАЧЕНИЯ(Б.Сумма) КАК Х ИЗ Справочник.Б КАК Б")),
              Origin::Open);
 }

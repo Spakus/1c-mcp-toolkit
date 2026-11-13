@@ -16,6 +16,8 @@
 //   Open:      the arguments must be open or client data; over protected data the call needs confirmation
 //              (C_FUNC_OVER_PROTECTED); the result is open;
 //   Confirm:   always needs confirmation;
+//   TypeOnly:  the result is open whatever the argument is: the type of a value (ТипЗнч) is not stored data; the
+//              argument is read as it is, never as a presentation;
 //   Emptiness: one bit, filled or not: open over a direct protected read (label ProtectedDirect) and
 //              over open / client data; over anything computed (Сред(x, 5), an unknown value) it is
 //              C_FUNC_OVER_PROTECTED like Open, since a substring's emptiness is a length oracle.
@@ -54,7 +56,7 @@ enum class Ty : uint8_t {
     Manager           // Справочники.<Имя>: VType::refs holds the table ("Справочник.<Имя>")
 };
 
-enum class Taint : uint8_t { Propagate, Open, Confirm, Emptiness };
+enum class Taint : uint8_t { Propagate, Open, Confirm, Emptiness, TypeOnly };
 
 // Constraint on the first argument of a method or function.
 enum class ArgRule : uint8_t {
@@ -117,7 +119,7 @@ inline constexpr const char* kContextNames[] = {"ЭтотОбъект", "Эта�
 
 inline constexpr GlobalRule kGlobalRules[] = {
     {"ЗначениеЗаполнено", "ValueIsFilled", Ty::Boolean, Taint::Emptiness, 1, 1, ArgRule::Any},
-    {"ТипЗнч", "TypeOf", Ty::TypeValue, Taint::Propagate, 1, 1, ArgRule::Any},
+    {"ТипЗнч", "TypeOf", Ty::TypeValue, Taint::TypeOnly, 1, 1, ArgRule::Any},
     {"Тип", "Type", Ty::TypeValue, Taint::Propagate, 1, 1, ArgRule::LiteralString},
     {"Строка", "String", Ty::String, Taint::Open, 1, 1, ArgRule::Any},
     {"Число", "Number", Ty::Number, Taint::Open, 1, 1, ArgRule::Any},

@@ -102,6 +102,13 @@ TEST(StrictGate, MetadataMembersAndIteration) {
                  "Результат = Мет.Измерения.Количество() * 100 + Мет.Ресурсы.Количество();")), std::string("safe"));
 }
 
+TEST(StrictGate, TypeOfIsNotAnOracle) {
+    CHECK_EQ(V(C(kCode + "Если ТипЗнч(Р.Имя) = Тип(\"Строка\") Тогда Результат = 1; Иначе Результат = 0; КонецЕсли;")),
+             std::string("safe"));
+    CHECK_EQ(V(Q("ВЫБРАТЬ ТИПЗНАЧЕНИЯ(К.Наименование) = ТИП(Строка) КАК Т ИЗ Справочник.Контрагенты КАК К")),
+             std::string("safe"));
+}
+
 TEST(StrictGate, KeywordAliasesStayRefused) {
     for (const char* alias : {"Есть", "И", "Истина"}) {
         CHECK(Has(Q(std::string("ВЫБРАТЬ К.Порядок КАК ") + alias + " ИЗ Справочник.Контрагенты КАК К"), "Q_PARSE_EXPECTED"));

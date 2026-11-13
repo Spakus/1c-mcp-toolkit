@@ -288,7 +288,7 @@ TEST(BslTaint, OperatorsOverProtectedNeedConfirmation) {
     CHECK(Denied(WithTable("Результат = Т[0].Имя + \"x\";"), "C_FUNC_OVER_PROTECTED"));
     CHECK(Denied(WithTable("Итог = 0; Итог = Итог + Т[0].Имя; Результат = Итог;"), "C_FUNC_OVER_PROTECTED"));
     CHECK(Denied(WithTable("Результат = Не Т[0].Имя;"), "C_FUNC_OVER_PROTECTED"));
-    CHECK(Denied(WithTable("Результат = ТипЗнч(Т[0].Имя);"), "C_FUNC_OVER_PROTECTED"));
+    CHECK(Safe(WithTable("Результат = ТипЗнч(Т[0].Имя);")));   // the type of a value is not stored data
     // Comparing open references is fine.
     CHECK(Safe(WithTable("Результат = Т[0].С = Т[0].С;")));
 }

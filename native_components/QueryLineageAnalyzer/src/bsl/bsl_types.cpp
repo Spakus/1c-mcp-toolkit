@@ -924,6 +924,7 @@ private:
             CheckOp(e.pos, in);
             return Typed(rule.result, Transform(in));
         }
+        if (rule.taint == Taint::TypeOnly) return Typed(rule.result, Origin::Open);
         // Open: the arguments are read as values (a reference as its presentation); Propagate: as they are.
         std::optional<Origin> input;
         for (const VType& a : args) JoinInto(input, rule.taint == Taint::Open ? ReadAsValue(a) : ValueLabel(a));

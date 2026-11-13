@@ -1,5 +1,4 @@
 // kind: query
-// expect: confirm
-// reason: Q_FUNC_OVER_PROTECTED
+// expect: safe
 ВЫБРАТЬ ТИПЗНАЧЕНИЯ(Контрагенты.ИНН) КАК Показатель
 ИЗ Справочник.Контрагенты КАК Контрагенты

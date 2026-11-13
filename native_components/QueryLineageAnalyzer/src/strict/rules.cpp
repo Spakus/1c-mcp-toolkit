@@ -494,9 +494,9 @@ private:
                 if (any) Add("Q_FUNC_OVER_PROTECTED", e.pos);   // a presentation of a protected scalar
                 else if (Tainted(LabelOf(&e)) && !(item_root && ctx == Ctx::SelectList)) Add("Q_PRESENTATION", e.pos);
                 return;
-            case CallClass::Sum:
-            case CallClass::TypeOf:
+            case CallClass::TypeOf: return;   // the type of a value is not stored data
             case CallClass::Plain:
+            case CallClass::Sum:
                 if (any) Add("Q_FUNC_OVER_PROTECTED", e.pos);
                 return;
             case CallClass::Unrecognized: return;   // Q_UNKNOWN_FUNCTION already added

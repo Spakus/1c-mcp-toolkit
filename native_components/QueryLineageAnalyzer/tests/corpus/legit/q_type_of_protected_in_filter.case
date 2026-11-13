@@ -1,7 +1,5 @@
 // kind: query
-// expect: confirm
-// reason: Q_FUNC_OVER_PROTECTED
-// reason: Q_COMPARE_PROTECTED
+// expect: safe
 ВЫБРАТЬ Контрагенты.Ссылка КАК Объект
 ИЗ Справочник.Контрагенты КАК Контрагенты
 ГДЕ ТИПЗНАЧЕНИЯ(Контрагенты.ИНН) = ТИП(Строка)

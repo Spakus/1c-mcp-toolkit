@@ -394,10 +394,9 @@ private:
         switch (ClassifyCall(e.text)) {
             case CallClass::Count: return Plain(Origin::Open, true);   // a number, not stored data
             case CallClass::TypeOf: {
-                // a type name is public, but the choice of the type may depend on a protected value
-                const bool open = operands.size() == 1 &&
-                                  (operands[0].origin == Origin::Open || operands[0].origin == Origin::Client);
-                return Plain(open ? Origin::Open : DerivedFrom(operands), true);
+                // The type of a value is not stored data; an Unknown operand stays Unknown.
+                const bool unknown = operands.size() != 1 || operands[0].origin == Origin::Unknown;
+                return unknown ? FieldLabel() : Plain(Origin::Open, true);
             }
             case CallClass::Sum: return Plain(DerivedFrom(operands), true);   // a number
             case CallClass::MinMax: return Plain(DerivedFrom(operands), PassesNoReference(operands));
