@@ -1,5 +1,6 @@
 #include "bsl/check_code.h"
 
+#include <algorithm>
 #include <set>
 #include <string>
 #include <vector>
@@ -35,6 +36,8 @@ struct Outcome {
     std::string canonical;
     std::vector<ResultPath> labels;
     std::set<std::string> missing_tables;
+    std::vector<Pos> module_call_sites;   // see CodeAnalysis; set by the type walk
+    std::vector<Pos> object_write_sites;
 };
 
 std::string Dump(const Json& json) {
@@ -225,6 +228,8 @@ Outcome Check(const std::string& code, const std::string& policy_json) {
     MergeRisks(o.risks, ScanRisksInSource(code));
     o.labels = a.result_labels;
     o.missing_tables = a.missing_tables;
+    o.module_call_sites = a.module_call_sites;
+    o.object_write_sites = a.object_write_sites;
 
     // Risks (R_*) are shown, not decisive: the runtime sandbox covers them; what it does not cover is
     // denied by DenyEffects in CheckWithDeny.
@@ -264,7 +269,17 @@ Outcome CheckWithDeny(const std::string& code, const std::string& policy_json) {
     for (const CodeReason& r : o.reasons) {
         if (r.code == "C_EVAL" || r.code == "C_DYNAMIC_NEW") refusal = r.code;
     }
-    const std::vector<CodeReason> denied = ScanDeniedEffects(code, policy.policy.DenyEffects(), refusal);
+    std::vector<CodeReason> denied = ScanDeniedEffects(code, policy.policy.DenyEffects(), refusal);
+    // The reserved tokens: a module call is no longer a window, a write on a value that is not a known type is denied.
+    if (policy.policy.DeniesReserved(strict::ReservedEffect::CommonModuleCall) && !o.module_call_sites.empty()) {
+        for (const Pos& pos : o.module_call_sites) denied.push_back(CodeReason{"C_EFFECT_DENIED", pos});
+        o.reasons.erase(std::remove_if(o.reasons.begin(), o.reasons.end(),
+                                       [](const CodeReason& r) { return r.code == "C_COMMON_MODULE"; }),
+                        o.reasons.end());
+    }
+    if (policy.policy.DeniesReserved(strict::ReservedEffect::TypedObjectWrite)) {
+        for (const Pos& pos : o.object_write_sites) denied.push_back(CodeReason{"C_EFFECT_DENIED", pos});
+    }
     if (!denied.empty()) {
         o.reasons.insert(o.reasons.begin(), denied.begin(), denied.end());
         o.verdict = "deny";

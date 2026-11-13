@@ -303,6 +303,19 @@ bool SameAcc(const std::map<std::string, VType>& a, const std::map<std::string, 
 
 // ---- the checker -----------------------------------------------------------------------------------------------------
 
+// The methods that write, post, delete or mark an object (the reserved "deny_effects" token typed_object_write).
+bool IsObjectWriteMethod(const std::string& key) {
+    static const std::set<std::string> kMethods = [] {
+        std::set<std::string> out;
+        for (const char* name : {"Записать", "Write", "Провести", "Post", "Удалить", "Delete", "УстановитьПометкуУдаления",
+                                 "SetDeletionMark", "ОтменитьПроведение", "UndoPosting"}) {
+            out.insert(AllowlistKey(name));
+        }
+        return out;
+    }();
+    return kMethods.count(key) != 0;
+}
+
 class Checker {
 public:
     Checker(const TypeCheckOptions& options, LabelState& state)
@@ -358,6 +371,11 @@ private:
         result_.source_unattributed = result_.source_unattributed || c.unattributed;
     }
     void NoteUnattributed() { result_.source_unattributed = true; }
+
+    // A call site for a reserved "deny_effects" token (CodeAnalysis::module_call_sites / object_write_sites).
+    void AddSite(const char* kind, std::vector<Pos>& sites, const Pos& pos) {
+        if (seen_.insert({kind, pos.offset}).second) sites.push_back(pos);
+    }
 
     // A call whose callee the allowlist does not know can do anything, writes included (R_UNKNOWN_EFFECT).
     void AddUnknownEffect(const Pos& pos) {
@@ -1075,6 +1093,7 @@ private:
             for (int i = 1; i <= nargs; ++i) Eval(*e.args[i]);
             const bool context = T().context_names.count(AllowlistKey(recv_expr.text)) != 0;
             Add(context ? "C_UNKNOWN_IDENT" : "C_COMMON_MODULE", recv_expr.pos);
+            if (!context) AddSite("S_MODULE_CALL", result_.module_call_sites, recv_expr.pos);
             AddUnknownEffect(e.pos);
             return VType();
         }
@@ -1085,6 +1104,7 @@ private:
         const MethodRule* rule = nullptr;
         if (recv.ty == Ty::Unknown) {
             Add("C_UNKNOWN_RECEIVER", e.pos);
+            if (IsObjectWriteMethod(key)) AddSite("S_OBJECT_WRITE", result_.object_write_sites, e.pos);
             AddUnknownEffect(e.pos);
         } else {
             const auto it = T().methods.find({static_cast<int>(recv.ty), key});

@@ -448,3 +448,147 @@ TEST(StrictGate, OriginIdOfWrongTypeIsPolicyShapeError) {
     s["tables"]["Документ.Заказ"]["tabular_sections"]["Товары"]["fields"]["Комментарий"]["origin_id"] = 1;
     CHECK(Has(Q("ВЫБРАТЬ 1 КАК Х", s.dump()), "Q_POLICY_INVALID"));
 }
+
+// ---- deny_effects: qualified entries, reserved tokens, external processing ----
+
+namespace {
+
+std::string DenyOf(const std::vector<std::string>& names, const std::string& code) {
+    const Json deny = names;
+    return V(C(code, Policy({}, &deny)));
+}
+
+bool Rejected(const std::string& entry) {
+    const Json deny = Json::array({entry});
+    return Has(C("Результат = 1;", Policy({}, &deny)), "C_POLICY_INVALID");
+}
+
+}  // namespace
+
+TEST(StrictGate, QualifiedDenyEntryMatchesTheManagerMethodPair) {
+    const std::vector<std::string> save{"ХранилищеОбщихНастроек.Сохранить"};
+    CHECK_EQ(DenyOf(save, "ХранилищеОбщихНастроек.Сохранить(\"а\", \"б\", 1);"), std::string("deny"));
+    CHECK(Has(C("ХранилищеОбщихНастроек.Сохранить(\"а\", \"б\", 1);", Policy({}, nullptr)), "C_EFFECT_DENIED"));   // default list: any mention
+    // the other method of the same manager is not denied by this entry
+    const Json deny = Json(save);
+    const Json load = C("Результат = ХранилищеОбщихНастроек.Загрузить(\"а\", \"б\");", Policy({}, &deny));
+    CHECK(V(load) != "deny");
+    CHECK(!Has(load, "C_EFFECT_DENIED"));
+    // case, yo and spaces around the dot are folded like a plain name
+    CHECK_EQ(DenyOf(save, "хранилищеобщихнастроек . сохранить(1);"), std::string("deny"));
+    CHECK_EQ(DenyOf({"Менеджер.Счёт"}, "Менеджер.Счет(1);"), std::string("deny"));
+    // a Latin look-alike letter inside the name is folded
+    CHECK_EQ(DenyOf(save, "ХранилищеОбщиx" "Настроек.Сохранить(1);"), std::string("deny"));
+    // the pair is matched wherever it stands in a chain, and as a property read too
+    CHECK_EQ(DenyOf(save, "Результат = Х.ХранилищеОбщихНастроек.Сохранить;"), std::string("deny"));
+    // the English pair
+    CHECK_EQ(DenyOf({"CommonSettingsStorage.Save"}, "CommonSettingsStorage.Save(\"a\", \"b\", 1);"), std::string("deny"));
+    // a star on the method part is a prefix
+    CHECK_EQ(DenyOf({"ХранилищеОбщихНастроек.Сохран*"}, "ХранилищеОбщихНастроек.Сохранить(1);"), std::string("deny"));
+    CHECK(DenyOf({"ХранилищеОбщихНастроек.Сохран*"}, "ХранилищеОбщихНастроек.Загрузить(1);") != "deny");
+    // the manager alone, or the method alone, is not the pair
+    CHECK(DenyOf(save, "ХранилищеОбщихНастроек = 1; Результат = ХранилищеОбщихНастроек;") != "deny");
+    CHECK(DenyOf(save, "Сохранить = 1; Результат = Сохранить;") != "deny");
+    // an executed string is searched for the pair
+    CHECK_EQ(DenyOf(save, "Выполнить(\"ХранилищеОбщихНастроек.Сохранить(1)\");"), std::string("deny"));
+    CHECK(DenyOf(save, "Выполнить(\"ХранилищеОбщихНастроек.Загрузить(1)\");") != "deny");
+}
+
+TEST(StrictGate, QualifiedDenyEntryShapes) {
+    CHECK(!Rejected("Менеджер.Метод"));
+    CHECK(!Rejected("Менеджер.Метод*"));
+    CHECK(Rejected("А.Б.В"));        // two dots
+    CHECK(Rejected(".Метод"));
+    CHECK(Rejected("Менеджер."));
+    CHECK(Rejected("Менеджер.*"));   // nothing before the star
+    CHECK(Rejected("Менеджер*.Метод"));
+    CHECK(Rejected("*.Метод"));
+    CHECK(Rejected("Менеджер. Метод"));
+    CHECK(Rejected("Менеджер.Ме-тод"));
+    CHECK(Rejected("."));
+}
+
+TEST(StrictGate, PlainDenyEntryDeniesAnyMentionIncludingALocalVariable) {
+    const std::vector<std::string> plain{"Пользователи1"};
+    CHECK_EQ(DenyOf(plain, "Пользователи1 = 1; Результат = Пользователи1;"), std::string("deny"));
+    CHECK_EQ(C("ФоновыеЗадания = 1; Результат = ФоновыеЗадания;").at("verdict").get<std::string>(), std::string("deny"));
+}
+
+TEST(StrictGate, ReservedCommonModuleCallToken) {
+    const std::string call = "Результат = МойМодуль.Функция(1);";
+    const Json with_token = Json::array({"common_module_call"});
+    const Json other = C(call, Policy({}, &with_token));
+    CHECK_EQ(V(other), std::string("deny"));
+    CHECK(Has(other, "C_EFFECT_DENIED"));
+    CHECK(!Has(other, "C_COMMON_MODULE"));
+    // a context name is not a module call
+    CHECK(V(C("Результат = ЭтотОбъект.Функция(1);", Policy({}, &with_token))) != "deny");
+    // without the token, or with the key absent, the module call is a window, as before
+    const Json without = Json::array({"ФоновыеЗадания"});
+    const Json plain = C(call, Policy({}, &without));
+    CHECK_EQ(V(plain), std::string("confirm"));
+    CHECK(Has(plain, "C_COMMON_MODULE"));
+    CHECK_EQ(V(C(call)), std::string("confirm"));
+    // only the whole string is the token: a variable of that name is just a variable
+    CHECK_EQ(V(C("common_module_call = 1; Результат = common_module_call;", Policy({}, &with_token))), std::string("safe"));
+}
+
+TEST(StrictGate, ReservedTypedObjectWriteToken) {
+    const Json token = Json::array({"typed_object_write"});
+    const std::string head = "Объект = Справочники.Контрагенты.СоздатьЭлемент(); ";
+    for (const char* method : {"Записать", "Write", "Провести", "Post", "Удалить", "Delete", "УстановитьПометкуУдаления",
+                               "SetDeletionMark", "ОтменитьПроведение", "UndoPosting", "записать", "ПРОВЕСТИ"}) {
+        const Json j = C(head + "Объект." + method + "();", Policy({}, &token));
+        CHECK_EQ(V(j), std::string("deny"));
+        CHECK(Has(j, "C_EFFECT_DENIED"));
+    }
+    // without the token nothing changes
+    const Json none = Json::array();
+    CHECK_EQ(V(C(head + "Объект.Записать();", Policy({}, &none))), std::string("confirm"));
+    CHECK_EQ(V(C(head + "Объект.Записать();")), std::string("confirm"));
+    // a known type is not an object: Array.Удалить is not denied by the token (it stays a window as an unknown method)
+    for (const char* known : {"Новый Массив", "Новый Соответствие", "Новый Структура", "Новый СписокЗначений",
+                              "Новый ТаблицаЗначений"}) {
+        const Json j = C(std::string("М = ") + known + "; М.Удалить(0); Результат = 1;", Policy({}, &token));
+        CHECK(V(j) != "deny");
+        CHECK(!Has(j, "C_EFFECT_DENIED"));
+    }
+    // another method on an unknown receiver is not a write
+    CHECK(V(C(head + "Результат = Объект.Количество();", Policy({}, &token))) != "deny");
+    // the token as an identifier is not the token
+    CHECK_EQ(V(C("typed_object_write = 1; Результат = typed_object_write;", Policy({}, &token))), std::string("safe"));
+}
+
+TEST(StrictGate, ExternalProcessingIsDeniedByDefault) {
+    CHECK_EQ(V(C("ВнешниеОбработки.Создать(\"x\", Ложь);")), std::string("deny"));
+    CHECK_EQ(V(C("ExternalDataProcessors.Create(\"x\", False);")), std::string("deny"));
+    CHECK_EQ(V(C("Выполнить(\"ВнешниеОтчеты.Создать(1)\");")), std::string("deny"));
+    CHECK_EQ(V(C("ExternalReports.Create(1);")), std::string("deny"));
+    CHECK_EQ(V(C("ПодключитьВнешнююОбработку(\"x\");")), std::string("deny"));
+    CHECK_EQ(V(C("ДополнительныеОтчетыИОбработки.СоздатьВнешнююОбработку(1);")), std::string("deny"));
+    CHECK_EQ(V(C("ВнешниеОбработки = 1; Результат = ВнешниеОбработки;")), std::string("deny"));   // a variable too
+}
+
+TEST(StrictGate, FullHostDenyListParsesAndIsSafeForPlainCode) {
+    const Json deny = Json::parse(R"([
+      "УстановитьОтключениеБезопасногоРежима","SetSafeModeDisabled","УстановитьБезопасныйРежим","SetSafeMode",
+      "УстановитьБезопасныйРежимРазделенияДанных","SetDataSeparationSafeMode",
+      "УстановитьПривилегированныйРежим","SetPrivilegedMode","НачатьТранзакцию","BeginTransaction",
+      "ЗафиксироватьТранзакцию","CommitTransaction","ОтменитьТранзакцию","RollbackTransaction",
+      "ФоновыеЗадания","BackgroundJobs","РегламентныеЗадания","ScheduledJobs","ЗаписьЖурналаРегистрации","WriteLogEvent",
+      "УстановитьИспользованиеСобытияЖурналаРегистрации","SetEventLogEventUse","ОчиститьЖурналРегистрации","ClearEventLog",
+      "ПользователиИнформационнойБазы","InfoBaseUsers","УстановитьМонопольныйРежим","SetExclusiveMode",
+      "ХранилищеОбщихНастроек.Сохранить","CommonSettingsStorage.Save",
+      "ХранилищеОбщихНастроек.Удалить","CommonSettingsStorage.Delete",
+      "ХранилищеСистемныхНастроек.Сохранить","SystemSettingsStorage.Save",
+      "ХранилищеСистемныхНастроек.Удалить","SystemSettingsStorage.Delete",
+      "ВнешниеОбработки","ExternalDataProcessors","ВнешниеОтчеты","ExternalReports",
+      "common_module_call","typed_object_write"])");
+    const std::string pol = Policy({}, &deny);
+    const Json safe = C("Результат = 1;", pol);
+    CHECK(!Has(safe, "C_POLICY_INVALID"));
+    CHECK_EQ(V(safe), std::string("safe"));
+    CHECK_EQ(V(C("ХранилищеСистемныхНастроек.Удалить(1);", pol)), std::string("deny"));
+    CHECK_EQ(V(C("SystemSettingsStorage.Save(1);", pol)), std::string("deny"));
+    CHECK_EQ(V(C("ВнешниеОбработки.Создать(\"x\");", pol)), std::string("deny"));
+}

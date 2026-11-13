@@ -47,6 +47,9 @@ struct FieldInfo {
     bool compare_allowed = false;
 };
 
+// Reserved tokens of "deny_effects" (whole strings): the code checker denies a class of calls, not a name.
+enum class ReservedEffect { CommonModuleCall, TypedObjectWrite };
+
 class FieldPolicy {
 public:
     struct Parsed;   // defined below: it holds a FieldPolicy by value
@@ -67,7 +70,13 @@ public:
     // The effect names the host does not cover by the runtime sandbox ("deny_effects" of the policy: exact names, or
     // a prefix when the pattern ends with '*'): code that mentions one is denied, never confirmed. The key absent:
     // kDefaultDenyEffects (provisional); an empty array: nothing is denied.
+    // An entry is a name, a prefix ("Name*"), or "Manager.Method" (the method part may end with '*'): the pair
+    // `Manager . Method` in the code is denied, the manager with another method is not.
     std::vector<std::string> DenyEffects() const;
+    // The reserved tokens "common_module_call" (a call of a method of a name the code never assigned) and
+    // "typed_object_write" (Записать / Провести / Удалить / ... on a value that is not a known allowlist type) were
+    // listed in "deny_effects". False when the key is absent.
+    bool DeniesReserved(ReservedEffect effect) const;
 
     // Normalized keys of every name the policy lists (a dot segment of a table or virtual table, a field, an extra
     // field) that mixes Latin and Cyrillic letters: real configuration names, not look-alikes (mixed_script.h).
@@ -102,6 +111,8 @@ private:
     std::map<std::string, bool> compare_allowed_;      // normalized display name -> allowed
     bool has_deny_effects_ = false;
     std::vector<std::string> deny_effects_;
+    bool deny_common_module_call_ = false;
+    bool deny_typed_object_write_ = false;
 };
 
 // Names of the effects denied when the policy has no "deny_effects" (background work runs in its own session and

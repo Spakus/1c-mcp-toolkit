@@ -640,8 +640,10 @@ std::vector<CodeReason> ScanRisksInSource(const std::string& utf8) {
 namespace {
 
 struct DenyPattern {
-    std::string key;
-    bool prefix = false;
+    std::string key;       // the name; of a qualified entry, the manager
+    bool prefix = false;   // `key` is a prefix; of a qualified entry, `method` is
+    bool qualified = false;
+    std::string method;    // qualified entry: the method
 };
 
 std::vector<DenyPattern> CompileDeny(const std::vector<std::string>& patterns) {
@@ -652,29 +654,81 @@ std::vector<DenyPattern> CompileDeny(const std::vector<std::string>& patterns) {
             d.prefix = true;
             p.pop_back();
         }
+        const size_t dot = p.find('.');
+        if (dot != std::string::npos) {
+            d.qualified = true;
+            d.method = AllowlistKey(p.substr(dot + 1));
+            p.resize(dot);
+            if (d.method.empty()) continue;
+        }
         d.key = AllowlistKey(p);
         if (!d.key.empty()) out.push_back(std::move(d));
     }
     return out;
 }
 
-bool DenyMatchesKey(const std::vector<DenyPattern>& deny, const std::string& key) {
-    for (const DenyPattern& d : deny) {
-        if (d.prefix ? key.compare(0, d.key.size(), d.key) == 0 : key == d.key) return true;
+// The keys a name stands for: itself, and (a mixed-script name, or one with a look-alike letter) its homoglyph folds.
+std::vector<std::string> FoldedKeys(const std::string& name, bool mixed) {
+    const std::string key = AllowlistKey(name);
+    std::vector<std::string> out{key};
+    if (mixed || NeedsFold(key)) {
+        out.push_back(AllowlistKey(FoldHomoglyphs(key, true)));
+        out.push_back(AllowlistKey(FoldHomoglyphs(key, false)));
+    }
+    return out;
+}
+
+bool KeyIs(const std::vector<std::string>& keys, const std::string& pattern, bool prefix) {
+    for (const std::string& k : keys) {
+        if (prefix ? k.compare(0, pattern.size(), pattern) == 0 : k == pattern) return true;
     }
     return false;
 }
 
 bool DenyMatchesName(const std::vector<DenyPattern>& deny, const std::string& name, bool mixed) {
-    const std::string key = AllowlistKey(name);
-    if (DenyMatchesKey(deny, key)) return true;
-    if (!mixed && !NeedsFold(key)) return false;
-    return DenyMatchesKey(deny, AllowlistKey(FoldHomoglyphs(key, true))) ||
-           DenyMatchesKey(deny, AllowlistKey(FoldHomoglyphs(key, false)));
+    const std::vector<std::string> keys = FoldedKeys(name, mixed);
+    for (const DenyPattern& d : deny) {
+        if (!d.qualified && KeyIs(keys, d.key, d.prefix)) return true;
+    }
+    return false;
+}
+
+// `manager . method` in the tokens: both names matched like a plain name.
+bool DenyMatchesPair(const std::vector<DenyPattern>& deny, const Token& manager, const Token& method) {
+    const std::vector<std::string> managers = FoldedKeys(manager.text, manager.mixed_script);
+    const std::vector<std::string> methods = FoldedKeys(method.text, method.mixed_script);
+    for (const DenyPattern& d : deny) {
+        if (d.qualified && KeyIs(managers, d.key, false) && KeyIs(methods, d.method, d.prefix)) return true;
+    }
+    return false;
+}
+
+bool IsNameToken(const Token& t) { return t.kind == Bt::Identifier || t.kind == Bt::Keyword; }
+
+bool IsBlankByte(char c) { return c == ' ' || c == '\t' || c == '\r' || c == '\n'; }
+
+// "MANAGER . METHOD" in a normalised text, with blanks around the dot.
+bool QualifiedInRawKey(const DenyPattern& d, const std::string& text) {
+    for (size_t p = text.find(d.key); p != std::string::npos; p = text.find(d.key, p + 1)) {
+        if (p > 0 && IsIdentByte(static_cast<unsigned char>(text[p - 1]))) continue;
+        size_t at = p + d.key.size();
+        while (at < text.size() && IsBlankByte(text[at])) ++at;
+        if (at >= text.size() || text[at] != '.') continue;
+        ++at;
+        while (at < text.size() && IsBlankByte(text[at])) ++at;
+        if (text.compare(at, d.method.size(), d.method) != 0) continue;
+        const size_t end = at + d.method.size();
+        if (d.prefix || end >= text.size() || !IsIdentByte(static_cast<unsigned char>(text[end]))) return true;
+    }
+    return false;
 }
 
 bool DenyInRawKey(const std::vector<DenyPattern>& deny, const std::string& text) {
     for (const DenyPattern& d : deny) {
+        if (d.qualified) {
+            if (QualifiedInRawKey(d, text)) return true;
+            continue;
+        }
         for (size_t p = text.find(d.key); p != std::string::npos; p = text.find(d.key, p + 1)) {
             const bool left = p == 0 || !IsIdentByte(static_cast<unsigned char>(text[p - 1]));
             const size_t end = p + d.key.size();
@@ -703,11 +757,14 @@ std::vector<CodeReason> ScanDeniedEffects(const std::string& utf8, const std::ve
         bool refused = utf8.size() > kMaxSourceBytes || parse_error_code == "C_EVAL" ||
                        parse_error_code == "C_DYNAMIC_NEW";
         std::string joined;   // "Фоновые" + "Задания": the strings of an executed text, joined
-        for (const Token& t : tokens) {
+        for (size_t i = 0; i < tokens.size(); ++i) {
+            const Token& t = tokens[i];
             if (t.kind == Bt::Unknown) refused = true;
             if (t.kind == Bt::String) joined += t.value;
-            if ((t.kind == Bt::Identifier || t.kind == Bt::Keyword) && out.size() < kMaxRisksPerClass &&
-                DenyMatchesName(deny, t.text, t.mixed_script)) {
+            if (!IsNameToken(t) || out.size() >= kMaxRisksPerClass) continue;
+            const bool pair = i + 2 < tokens.size() && tokens[i + 1].kind == Bt::Dot && IsNameToken(tokens[i + 2]) &&
+                              DenyMatchesPair(deny, t, tokens[i + 2]);
+            if (pair || DenyMatchesName(deny, t.text, t.mixed_script)) {
                 out.push_back(CodeReason{"C_EFFECT_DENIED", Pos{t.pos, t.line, t.col}});
             }
         }

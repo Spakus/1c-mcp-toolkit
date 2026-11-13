@@ -269,6 +269,12 @@ struct CodeAnalysis {
     // column the query check could not attribute).
     std::set<std::string> source_fields;
     bool source_unattributed = false;
+    // Call sites the "deny_effects" reserved tokens act on (not reasons: the policy decides whether they deny):
+    // a method called on a name the code never assigned (C_COMMON_MODULE), and Записать / Провести / Удалить /
+    // УстановитьПометкуУдаления / ОтменитьПроведение (or their English names) called on a value of Unknown type, which
+    // a known allowlist type (Массив, Структура, ...) never is.
+    std::vector<Pos> module_call_sites;
+    std::vector<Pos> object_write_sites;
 };
 
 // The final value of Результат as the description pass sees it (a flattened VType of bsl_types.cpp).

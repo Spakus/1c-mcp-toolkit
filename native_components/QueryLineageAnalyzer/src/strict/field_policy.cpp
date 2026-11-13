@@ -146,22 +146,47 @@ public:
     }
 
 private:
-    // "deny_effects": an array of effect names, each an identifier (letters, digits, '_') optionally ending with '*'.
+    // "deny_effects": an array of strings, each one of
+    //   - an effect name: an identifier (letters, digits, '_') optionally ending with '*';
+    //   - a qualified name "Manager.Method": two such identifiers around one dot, the star only on the method part;
+    //   - a reserved token, whole: "common_module_call", "typed_object_write" (never read as a name).
     static bool ReadDenyEffects(const Json& root, FieldPolicy* policy) {
         const auto deny = root.find("deny_effects");
         if (deny == root.end()) return true;
         if (!deny->is_array() || deny->size() > 256) return false;
         std::vector<std::string> names;
+        bool module_call = false, object_write = false;
         for (const auto& n : *deny) {
             if (!n.is_string()) return false;
             const std::string name = n.get<std::string>();
-            const bool star = !name.empty() && name.back() == '*';
-            if (name.size() > 128 || !IsIdentifierName(star ? name.substr(0, name.size() - 1) : name)) return false;
+            if (name == "common_module_call") {
+                module_call = true;
+                continue;
+            }
+            if (name == "typed_object_write") {
+                object_write = true;
+                continue;
+            }
+            if (name.size() > 128 || !IsEffectName(name)) return false;
             names.push_back(name);
         }
         policy->has_deny_effects_ = true;
         policy->deny_effects_ = std::move(names);
+        policy->deny_common_module_call_ = module_call;
+        policy->deny_typed_object_write_ = object_write;
         return true;
+    }
+
+    static bool IsEffectName(const std::string& name) {
+        const size_t dot = name.find('.');
+        if (dot == std::string::npos) return IsEffectPart(name, true);
+        return name.find('.', dot + 1) == std::string::npos && IsEffectPart(name.substr(0, dot), false) &&
+               IsEffectPart(name.substr(dot + 1), true);
+    }
+
+    static bool IsEffectPart(const std::string& part, bool star_allowed) {
+        const bool star = star_allowed && !part.empty() && part.back() == '*';
+        return IsIdentifierName(star ? part.substr(0, part.size() - 1) : part);
     }
 
     static void IndexCompareAllowed(FieldPolicy* policy) {
@@ -316,7 +341,8 @@ const char* const kDefaultDenyEffects[] = {
     "ПрекратитьРаботуСистемы", "УстановитьМонопольныйРежим", "ПользователиИнформационнойБазы", "InfoBaseUsers",
     "РасширенияКонфигурации", "ConfigurationExtensions", "ХранилищеОбщихНастроек", "CommonSettingsStorage",
     "ХранилищеСистемныхНастроек", "SystemSettingsStorage", "ХранилищеНастроекДанныхФорм", "FormDataSettingsStorage",
-    "ДлительныеОперации", "TimeConsumingOperations"};
+    "ДлительныеОперации", "TimeConsumingOperations", "ВнешниеОбработки", "ExternalDataProcessors", "ВнешниеОтчеты",
+    "ExternalReports", "ПодключитьВнешнююОбработку", "ДополнительныеОтчетыИОбработки"};
 const size_t kDefaultDenyEffectsCount = sizeof(kDefaultDenyEffects) / sizeof(kDefaultDenyEffects[0]);
 
 bool FieldPolicy::CompareAllowed(const std::string& display) const {
@@ -327,6 +353,10 @@ bool FieldPolicy::CompareAllowed(const std::string& display) const {
 std::vector<std::string> FieldPolicy::DenyEffects() const {
     if (has_deny_effects_) return deny_effects_;
     return std::vector<std::string>(kDefaultDenyEffects, kDefaultDenyEffects + kDefaultDenyEffectsCount);
+}
+
+bool FieldPolicy::DeniesReserved(ReservedEffect effect) const {
+    return effect == ReservedEffect::CommonModuleCall ? deny_common_module_call_ : deny_typed_object_write_;
 }
 
 bool FieldPolicy::HasTable(const std::string& table) const {
