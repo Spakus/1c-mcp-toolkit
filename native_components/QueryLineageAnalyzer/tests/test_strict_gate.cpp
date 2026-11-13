@@ -109,6 +109,14 @@ TEST(StrictGate, TypeOfIsNotAnOracle) {
              std::string("safe"));
 }
 
+TEST(StrictGate, OrderingByReferencePasses) {
+    CHECK_EQ(V(Q("ВЫБРАТЬ К.Группа КАК Г ИЗ Справочник.Контрагенты КАК К УПОРЯДОЧИТЬ ПО К.Группа")), std::string("safe"));
+    CHECK_EQ(V(Q("ВЫБРАТЬ ПЕРВЫЕ 5 К.Ссылка КАК С ИЗ Справочник.Контрагенты КАК К УПОРЯДОЧИТЬ ПО К.Ссылка")),
+             std::string("safe"));
+    CHECK(Has(Q("ВЫБРАТЬ К.Порядок КАК П ИЗ Справочник.Контрагенты КАК К УПОРЯДОЧИТЬ ПО К.Наименование"),
+              "Q_ORDER_PROTECTED"));
+}
+
 TEST(StrictGate, KeywordAliasesStayRefused) {
     for (const char* alias : {"Есть", "И", "Истина"}) {
         CHECK(Has(Q(std::string("ВЫБРАТЬ К.Порядок КАК ") + alias + " ИЗ Справочник.Контрагенты КАК К"), "Q_PARSE_EXPECTED"));

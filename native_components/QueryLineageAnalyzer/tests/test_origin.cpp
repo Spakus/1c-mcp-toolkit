@@ -648,17 +648,16 @@ TEST(Origin, OrderByOrdinalResolvesToTheSelectedColumn) {
         "ВЫБРАТЬ Б.Сумма КАК С ИЗ Справочник.Б КАК Б ИТОГИ ПО 1"), "Q_ORDER_PROTECTED"));
 }
 
-// The documentation does not say that a plain ordering by a reference avoids its presentation (only that
-// АВТОУПОРЯДОЧИВАНИЕ substitutes the default sort fields), so every ordering by a reference needs every target's
-// presentation to be open. Справочник.А and Справочник.Б have protected presentations under kPolicyAB.
-TEST(Origin, OrderingByReferenceNeedsOpenPresentation) {
+// ordering by a reference passes, whatever the presentation of its targets. The
+// platform documentation does not say what a plain УПОРЯДОЧИТЬ ПО does with a reference, so the acceptance on a stand
+// has to prove it; АВТОУПОРЯДОЧИВАНИЕ still sorts by presentation and keeps its refusal.
+TEST(Origin, OrderingByReferencePasses) {
     const char* q = "ВЫБРАТЬ Б.Сумма КАК С, Б.СсылкаНаА КАК К ИЗ Справочник.Б КАК Б ";
     for (const char* tail : {"УПОРЯДОЧИТЬ ПО Б.СсылкаНаА", "УПОРЯДОЧИТЬ ПО К", "УПОРЯДОЧИТЬ ПО 2", "УПОРЯДОЧИТЬ ПО С, К УБЫВ"}) {
-        CHECK(HasReason(AnalyzeForTest(kPolicyAB, std::string(q) + tail), "Q_ORDER_PROTECTED"));
+        CHECK(AnalyzeForTest(kPolicyAB, std::string(q) + tail).verdict == Verdict::Safe);
     }
-    CHECK(HasReason(AnalyzeForTest(kPolicyAB, std::string(q) + "ИТОГИ ПО К"), "Q_TOTALS"));
-    CHECK(HasReason(AnalyzeForTest(kPolicyAB, "ВЫБРАТЬ ПЕРВЫЕ 1 Б.Ссылка КАК К ИЗ Справочник.Б КАК Б УПОРЯДОЧИТЬ ПО К"),
-                    "Q_TOP_WITH_ORDER"));
+    CHECK(AnalyzeForTest(kPolicyAB, "ВЫБРАТЬ ПЕРВЫЕ 1 Б.Ссылка КАК К ИЗ Справочник.Б КАК Б УПОРЯДОЧИТЬ ПО К").verdict ==
+          Verdict::Safe);
     CHECK(AnalyzeForTest(kPolicyAB, std::string(q) + "УПОРЯДОЧИТЬ ПО С").verdict == Verdict::Safe);
     // A target with an open presentation may be ordered by.
     auto open = FieldPolicy::FromJson(R"({"version":1,"tables":{

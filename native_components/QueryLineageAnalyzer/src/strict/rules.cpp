@@ -147,27 +147,19 @@ private:
         }
         if (n == 0 || n > it->second.size()) return false;
         const Origin o = it->second[n - 1].origin;
-        return (o == Origin::Open || o == Origin::Client) && it->second[n - 1].refs_known &&
-               PresentationsOpen(it->second[n - 1].refs);
+        return (o == Origin::Open || o == Origin::Client) && it->second[n - 1].refs_known;
     }
 
-    // Ordering by a reference: the platform documentation states only that АВТОУПОРЯДОЧИВАНИЕ replaces a reference by
-    // the default sort fields of its table (код / наименование / дата); it does not say that a plain УПОРЯДОЧИТЬ ПО,
-    // an ordinal or ИТОГИ ПО avoid the presentation, and ТаблицаЗначений.Сортировать without a comparison object
-    // compares "элементы остальных типов ... по строковому представлению". So any ordering by a reference is
-    // allowed only when every target's presentation is open (fail closed).
-    bool PresentationsOpen(const std::vector<std::string>& targets) const {
-        for (const std::string& t : targets) {
-            if (!policy_.HasTable(t) || policy_.PresentationClass(t) != FieldClass::Open) return false;
-        }
-        return true;
-    }
-
+    // Ordering by a reference passes whatever the presentation of its targets. The
+    // platform documentation does not say what a plain УПОРЯДОЧИТЬ ПО / an ordinal / ИТОГИ ПО does with a reference
+    // (only that АВТОУПОРЯДОЧИВАНИЕ substitutes the default sort fields, which AutoorderTainted still refuses): the
+    // acceptance on a stand has to prove it. A value that may be a reference with unknown targets is
+    // still refused (fail closed).
     bool OrdersByHiddenPresentation(const ExprP& e) const {
         if (!e) return false;
         const auto it = labels_.expr.find(e.get());
         // unlabelled, or a value that may be a reference with unknown targets: fail closed
-        return it == labels_.expr.end() || !it->second.refs_known || !PresentationsOpen(it->second.refs);
+        return it == labels_.expr.end() || !it->second.refs_known;
     }
 
     void MirrorResolution() {
