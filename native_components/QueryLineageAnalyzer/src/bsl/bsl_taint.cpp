@@ -705,6 +705,18 @@ bool DenyMatchesPair(const std::vector<DenyPattern>& deny, const Token& manager,
 
 bool IsNameToken(const Token& t) { return t.kind == Bt::Identifier || t.kind == Bt::Keyword; }
 
+// The manager of a qualified entry mentioned other than as `Manager . name`: carried under another name (assigned,
+// passed, parenthesised), so the pair the entry looks for would never appear.
+bool DenyAliasesManager(const std::vector<DenyPattern>& deny, const std::vector<Token>& tokens, size_t i) {
+    const bool called = i + 2 < tokens.size() && tokens[i + 1].kind == Bt::Dot && IsNameToken(tokens[i + 2]);
+    if (called) return false;
+    const std::vector<std::string> keys = FoldedKeys(tokens[i].text, tokens[i].mixed_script);
+    for (const DenyPattern& d : deny) {
+        if (d.qualified && KeyIs(keys, d.key, false)) return true;
+    }
+    return false;
+}
+
 bool IsBlankByte(char c) { return c == ' ' || c == '\t' || c == '\r' || c == '\n'; }
 
 // "MANAGER . METHOD" in a normalised text, with blanks around the dot.
@@ -723,10 +735,22 @@ bool QualifiedInRawKey(const DenyPattern& d, const std::string& text) {
     return false;
 }
 
+// The manager of a qualified entry as a whole word that is not followed by a dot (see DenyAliasesManager).
+bool ManagerAliasInRawKey(const DenyPattern& d, const std::string& text) {
+    for (size_t p = text.find(d.key); p != std::string::npos; p = text.find(d.key, p + 1)) {
+        if (p > 0 && IsIdentByte(static_cast<unsigned char>(text[p - 1]))) continue;
+        size_t at = p + d.key.size();
+        if (at < text.size() && IsIdentByte(static_cast<unsigned char>(text[at]))) continue;
+        while (at < text.size() && IsBlankByte(text[at])) ++at;
+        if (at >= text.size() || text[at] != '.') return true;
+    }
+    return false;
+}
+
 bool DenyInRawKey(const std::vector<DenyPattern>& deny, const std::string& text) {
     for (const DenyPattern& d : deny) {
         if (d.qualified) {
-            if (QualifiedInRawKey(d, text)) return true;
+            if (QualifiedInRawKey(d, text) || ManagerAliasInRawKey(d, text)) return true;
             continue;
         }
         for (size_t p = text.find(d.key); p != std::string::npos; p = text.find(d.key, p + 1)) {
@@ -764,7 +788,7 @@ std::vector<CodeReason> ScanDeniedEffects(const std::string& utf8, const std::ve
             if (!IsNameToken(t) || out.size() >= kMaxRisksPerClass) continue;
             const bool pair = i + 2 < tokens.size() && tokens[i + 1].kind == Bt::Dot && IsNameToken(tokens[i + 2]) &&
                               DenyMatchesPair(deny, t, tokens[i + 2]);
-            if (pair || DenyMatchesName(deny, t.text, t.mixed_script)) {
+            if (pair || DenyMatchesName(deny, t.text, t.mixed_script) || DenyAliasesManager(deny, tokens, i)) {
                 out.push_back(CodeReason{"C_EFFECT_DENIED", Pos{t.pos, t.line, t.col}});
             }
         }

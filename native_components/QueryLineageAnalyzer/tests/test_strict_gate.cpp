@@ -488,8 +488,8 @@ TEST(StrictGate, QualifiedDenyEntryMatchesTheManagerMethodPair) {
     // a star on the method part is a prefix
     CHECK_EQ(DenyOf({"МенеджерНастроек.Сохран*"}, "МенеджерНастроек.Сохранить(1);"), std::string("deny"));
     CHECK(DenyOf({"МенеджерНастроек.Сохран*"}, "МенеджерНастроек.Загрузить(1);") != "deny");
-    // the manager alone, or the method alone, is not the pair
-    CHECK(DenyOf(save, "МенеджерНастроек = 1; Результат = МенеджерНастроек;") != "deny");
+    // the manager alone (carried under another name) is denied, the method alone is not the pair
+    CHECK_EQ(DenyOf(save, "МенеджерНастроек = 1; Результат = МенеджерНастроек;"), std::string("deny"));
     CHECK(DenyOf(save, "Сохранить = 1; Результат = Сохранить;") != "deny");
     // an executed string is searched for the pair
     CHECK_EQ(DenyOf(save, "Выполнить(\"МенеджерНастроек.Сохранить(1)\");"), std::string("deny"));
@@ -767,4 +767,27 @@ TEST(StrictGate, HostDenyListIsAddedToTheDefaultNeverReplacesIt) {
     const Json none = Json::array();
     CHECK_EQ(V(C("ФоновыеЗадания.Выполнить(\"Х\");", Policy({}, &none))), std::string("deny"));
     CHECK_EQ(V(C("Результат = 1;", Policy({}, &none))), std::string("safe"));
+}
+
+// ---- a manager named by a qualified entry cannot be carried around under another name ----
+
+TEST(StrictGate, QualifiedDenyEntryIsNotBypassedByAliasing) {
+    const std::vector<std::string> entry{"МойМенеджер.Выполнить"};
+    for (const char* code : {"М = МойМенеджер; М.Выполнить(1);",
+                             "Х = Новый Массив; Х.Добавить(МойМенеджер); Результат = 1;",
+                             "Результат = Тип(МойМенеджер);",
+                             "(МойМенеджер).Выполнить(1);",
+                             "Выполнить(\"М = МойМенеджер;\");"}) {
+        CHECK_EQ(DenyOf(entry, code), std::string("deny"));
+    }
+    // the other method of the manager, called directly, is still allowed
+    const Json deny = Json(entry);
+    const Json other = C("Результат = МойМенеджер.Прочитать(1);", Policy({}, &deny));
+    CHECK(!Has(other, "C_EFFECT_DENIED"));
+    CHECK(V(other) != "deny");
+    CHECK(DenyOf(entry, "Выполнить(\"МойМенеджер.Прочитать(1)\");") != "deny");
+    // a star entry on the method part behaves the same
+    CHECK_EQ(DenyOf({"МойМенеджер.Выпол*"}, "М = МойМенеджер; М.Выполнить(1);"), std::string("deny"));
+    // another name that merely contains the manager's name is not the manager
+    CHECK(DenyOf(entry, "МойМенеджерДва = 1; Результат = МойМенеджерДва;") != "deny");
 }
