@@ -223,7 +223,12 @@ QueryCheckResult Analyze(const std::string& query_utf8, const FieldPolicy& polic
     if (tokens && !tokens->empty()) TokenLiteralBinder(*tokens).Run(parsed.batch);
 
     const AnalysisResult analysis = AnalyzeQuery(parsed.batch, policy);
-    for (const Reason& reason : analysis.reasons) out.reasons.push_back(MakeQueryReason(reason.code, &reason.pos));
+    for (const Reason& reason : analysis.reasons) {
+        QueryReason r = MakeQueryReason(reason.code, &reason.pos);
+        r.op = reason.op;
+        r.field = reason.field;
+        out.reasons.push_back(std::move(r));
+    }
     out.missing_tables = analysis.missing_tables;
 
     bool safe = analysis.verdict == Verdict::Safe && analysis.reasons.empty() && analysis.missing_tables.empty() &&
@@ -264,7 +269,10 @@ QueryCheckResult Analyze(const std::string& query_utf8, const FieldPolicy& polic
 std::string ToJson(const QueryCheckResult& r) {
     Json out = Skeleton();
     for (const QueryReason& reason : r.reasons) {
-        out["reasons"].push_back(MakeReason(reason.code, reason.has_pos ? &reason.pos : nullptr));
+        Json j = MakeReason(reason.code, reason.has_pos ? &reason.pos : nullptr);
+        if (!reason.op.empty()) j["op"] = reason.op;
+        if (!reason.field.empty()) j["field"] = reason.field;
+        out["reasons"].push_back(std::move(j));
     }
     for (const std::string& table : r.missing_tables) out["missing_tables"].push_back(table);
     out["canonical"] = r.canonical;

@@ -37,6 +37,9 @@ struct FieldInfo {
     // false: a reference whose targets the policy does not list (Узел of a change table); its presentation is not
     // known, so it is never read as a string or ordered by without confirmation.
     bool refs_known = true;
+    // "<Table>.<Field>" (a tabular section: "<Table>.<Section>.<Field>") spelled as the host wrote the policy; the
+    // name an oracle reason reports and the key "compare_allowed" is looked up by (CompareAllowed).
+    std::string display;
 };
 
 class FieldPolicy {

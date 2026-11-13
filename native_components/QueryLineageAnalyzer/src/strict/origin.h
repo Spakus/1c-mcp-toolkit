@@ -30,6 +30,11 @@ enum class CallClass { Count, Sum, MinMax, Presentation, TypeOf, Plain, Unrecogn
 // `name` is the call's text from the AST (any case, Russian or English spelling).
 CallClass ClassifyCall(const std::string& name);
 
+// String functions of the query language (ПОДСТРОКА, ДЛИНАСТРОКИ and English spellings): over a protected string they
+// probe its pieces (an oracle primitive, op "strfunc"). IsStringLengthFunction: the one that returns a number.
+bool IsStringFunction(const std::string& call_name);
+bool IsStringLengthFunction(const std::string& call_name);
+
 // Index of the period argument of a date function (НАЧАЛОПЕРИОДА, КОНЕЦПЕРИОДА, ДОБАВИТЬКДАТЕ, РАЗНОСТЬДАТ and
 // English spellings), or -1 for any other call. A bare period name (ГОД, КВАРТАЛ, ДЕНЬ, ...) there is a constant.
 int PeriodArgIndex(const std::string& call_name);

@@ -64,11 +64,33 @@ private:
     std::set<const Select*> statements_;   // the statement-level selects (ИТОГИ is considered only there)
     std::set<const Expr*> cast_in_emptiness_;   // casts that belong to an emptiness test (no reason of their own)
 
-    void Add(const char* code, const Pos& pos) {
+    void Add(const char* code, const Pos& pos, const std::string& op = std::string(),
+             const std::string& field = std::string()) {
         for (const Reason& r : out_.reasons) {
-            if (r.code == code && r.pos.offset == pos.offset) return;
+            if (r.code == code && r.pos.offset == pos.offset && r.op == op && r.field == field) return;
         }
-        out_.reasons.push_back(Reason{code, pos});
+        out_.reasons.push_back(Reason{code, pos, op, field});
+    }
+
+    // An oracle reason: one reason per policy field the tainted operands of `node` read (or of `node`
+    // itself when `self`), each with the primitive `op`; one without a field when part of the content cannot be
+    // attributed. Nothing when the host allows the comparison of every field (CoveredByCompareAllowed).
+    void AddOracle(const char* code, const char* op, const Expr& node, const Pos& pos, bool self = false) {
+        Attribution attr;
+        bool any = false;
+        const auto take = [&](const Expr* x) {
+            const auto it = labels_.expr.find(x);
+            if (it == labels_.expr.end() || !Tainted(it->second.origin)) return;
+            any = true;
+            attr.Join(it->second.attr);
+        };
+        if (self) {
+            take(&node);
+        } else {
+            for (const ExprP& a : node.args) take(a.get());
+        }
+        for (const std::string& f : attr.fields) Add(code, pos, op, f);
+        if (attr.unattributed || attr.fields.empty()) Add(code, pos, op);
     }
 
     Origin LabelOf(const Expr* e) const {
@@ -358,7 +380,10 @@ private:
                 CheckOrdinal(o.expr);
                 ordering = true;
             }
-            if (TaintedExpr(o.expr) || OrdersByHiddenPresentation(o.expr)) {
+            if (TaintedExpr(o.expr)) {
+                AddOracle("Q_ORDER_PROTECTED", "range", *o.expr, o.expr->pos, true);
+                ordering = true;
+            } else if (OrdersByHiddenPresentation(o.expr)) {
                 Add("Q_ORDER_PROTECTED", o.expr->pos);
                 ordering = true;
             }
@@ -432,14 +457,14 @@ private:
 
     // Reason for "a protected value is compared with `other`" when exactly one side is a direct protected read
     // (a bound token or a protected field). `la`/`lb` are the operand labels; `other` the non-protected operand.
-    void EqRule(Origin la, Origin lb, const Expr* a, const Expr* b, Ctx ctx, const Pos& pos) {
+    void EqRule(const Expr& node, Origin la, Origin lb, const Expr* a, const Expr* b, Ctx ctx, const Pos& pos) {
         const bool ta = Tainted(la);
         const bool tb = Tainted(lb);
         if (!ta && !tb) return;
         if (!IsConditionCtx(ctx)) Add("Q_FUNC_OVER_PROTECTED", pos);   // a computed bit of a protected value
         if (la == Origin::ProtectedDirect && lb == Origin::ProtectedDirect) return;
         if ((ta && la != Origin::ProtectedDirect) || (tb && lb != Origin::ProtectedDirect)) {
-            Add("Q_COMPARE_PROTECTED", pos);
+            AddOracle("Q_COMPARE_PROTECTED", "strfunc", node, pos);   // equality over a computed piece of a value
             return;
         }
         const Expr* other = ta ? b : a;
@@ -468,10 +493,10 @@ private:
             case Expr::K::InSubquery:
             case Expr::K::InHierarchy: InSubqueryRules(e, ctx); break;
             case Expr::K::Between:
-                if (any) Add("Q_COMPARE_PROTECTED", e.pos);
+                if (any) AddOracle("Q_COMPARE_PROTECTED", "range", e, e.pos);
                 break;
             case Expr::K::Like:
-                if (any) Add("Q_LIKE_PROTECTED", e.pos);
+                if (any) AddOracle("Q_LIKE_PROTECTED", "like", e, e.pos);
                 break;
             default: break;   // leaves, ССЫЛКА type test, Row
         }
@@ -488,7 +513,7 @@ private:
         switch (ClassifyCall(e.text)) {
             case CallClass::Count: return;   // COUNT([DISTINCT] x) is an open number
             case CallClass::MinMax:
-                if (any) Add("Q_MINMAX_PROTECTED", e.pos);
+                if (any) AddOracle("Q_MINMAX_PROTECTED", "range", e, e.pos);   // the order of the values
                 return;
             case CallClass::Presentation:
                 if (any) Add("Q_FUNC_OVER_PROTECTED", e.pos);   // a presentation of a protected scalar
@@ -496,6 +521,9 @@ private:
                 return;
             case CallClass::TypeOf: return;   // the type of a value is not stored data
             case CallClass::Plain:
+                if (any && IsStringFunction(e.text)) AddOracle("Q_FUNC_OVER_PROTECTED", "strfunc", e, e.pos);
+                else if (any) Add("Q_FUNC_OVER_PROTECTED", e.pos);
+                return;
             case CallClass::Sum:
                 if (any) Add("Q_FUNC_OVER_PROTECTED", e.pos);
                 return;
@@ -522,10 +550,10 @@ private:
         if (!any) return;
         if (IsOpenBitNode(e)) return;
         if (e.text == "=") {
-            EqRule(LabelOf(e.args[0].get()), LabelOf(e.args[1].get()), e.args[0].get(), e.args[1].get(), ctx, e.pos);
+            EqRule(e, LabelOf(e.args[0].get()), LabelOf(e.args[1].get()), e.args[0].get(), e.args[1].get(), ctx, e.pos);
         } else if (IsComparison(e.text)) {
-            Add("Q_COMPARE_PROTECTED", e.pos);
-            if (!IsConditionCtx(ctx)) Add("Q_FUNC_OVER_PROTECTED", e.pos);
+            AddOracle("Q_COMPARE_PROTECTED", "range", e, e.pos);
+            if (!IsConditionCtx(ctx)) AddOracle("Q_FUNC_OVER_PROTECTED", "range", e, e.pos);
         } else if (IsLogicalOp(e.text)) {
             if (!IsConditionCtx(ctx)) Add("Q_FUNC_OVER_PROTECTED", e.pos);
         } else {
@@ -542,7 +570,7 @@ private:
         const Origin l0 = LabelOf(e.args[0].get());
         for (size_t i = 1; i < e.args.size(); ++i) {
             if (!e.args[i]) continue;
-            EqRule(l0, LabelOf(e.args[i].get()), e.args[0].get(), e.args[i].get(), ctx, e.pos);
+            EqRule(e, l0, LabelOf(e.args[i].get()), e.args[0].get(), e.args[i].get(), ctx, e.pos);
         }
     }
 
@@ -557,7 +585,7 @@ private:
             if (Tainted(l0) || Tainted(ls) || AnyArgTainted(e)) Add("Q_COMPARE_PROTECTED", e.pos);
             return;
         }
-        EqRule(l0, ls, e.args[0].get(), nullptr, ctx, e.pos);
+        EqRule(e, l0, ls, e.args[0].get(), nullptr, ctx, e.pos);
     }
 };
 

@@ -119,6 +119,7 @@ private:
             label.origin = result.columns[i].origin;
             label.refs = result.columns[i].refs;
             label.refs_known = result.columns[i].refs_known;
+            label.attr = result.columns[i].attr;
             if (i < result.positions.size()) label.pos = result.positions[i];
             out_.columns.push_back(std::move(label));
         }
@@ -263,6 +264,14 @@ private:
     //   an unlisted function or an unset node -> Unknown.
     FieldLabel Label(const Expr& e, const Scope& scope, int depth, const AliasInfo* aliases) {
         FieldLabel l = LabelNode(e, scope, depth, aliases);
+        // A computed value reads the fields of its operands; a subquery value has none a reason could name.
+        if (e.kind != Expr::K::Field && e.kind != Expr::K::Param) {
+            for (const ExprP& a : e.args) {
+                const auto it = a ? labels_.expr.find(a.get()) : labels_.expr.end();
+                if (it != labels_.expr.end()) l.attr.Join(it->second.attr);
+            }
+            if (e.subquery) l.attr.unattributed = true;
+        }
         labels_.expr[&e] = l;   // the rule engine reads the label of every node from here
         return l;
     }
@@ -371,6 +380,7 @@ private:
                     l.origin = (*aliases->columns)[i].origin;
                     l.refs = (*aliases->columns)[i].refs;
                     l.refs_known = (*aliases->columns)[i].refs_known;
+                    l.attr = (*aliases->columns)[i].attr;
                 }
                 return l;
             }
@@ -391,7 +401,11 @@ private:
         switch (policy_.OriginOfParam(e.text)) {
             // A parameter may be a reference whose targets are not known.
             case ParamOrigin::Client: return Plain(Origin::Client, false);
-            case ParamOrigin::TokenProtected: return Plain(Origin::ProtectedDirect, false);   // equality operand
+            case ParamOrigin::TokenProtected: {   // equality operand; the token has no policy field
+                FieldLabel l = Plain(Origin::ProtectedDirect, false);
+                l.attr.unattributed = true;
+                return l;
+            }
             case ParamOrigin::TokenUnknown: break;
             case ParamOrigin::Missing: sink_.Issue(kResolveUnknownParam, e.pos); break;
         }
@@ -453,14 +467,18 @@ private:
         if (!x.refs.empty()) {
             Origin o = PresentationOfTargets(x.refs);
             if (x.origin != Origin::Open && x.origin != Origin::Client) o = JoinOrigin(o, Transform(x.origin));
-            return Plain(o, true);   // a string
+            FieldLabel presentation = Plain(o, true);   // a string
+            presentation.attr.unattributed = true;      // a presentation is not a policy field
+            return presentation;
         }
         if (kind == Expr::K::StringLit || kind == Expr::K::NumberLit || kind == Expr::K::BoolLit) return Plain(x.origin, true);
         // No known target: a public-looking operand may still hold a reference (a parameter, a column whose
         // targets were lost), whose presentation is stored data. Only operands that are protected anyway are
         // a plain function over protected data.
         if (x.origin == Origin::Open || x.origin == Origin::Client) return FieldLabel();
-        return Plain(Transform(x.origin), true);
+        FieldLabel plain = Plain(Transform(x.origin), true);
+        plain.attr = x.attr;
+        return plain;
     }
 
     void Walk(const ExprP& e, const Scope& scope, int depth, const AliasInfo* aliases = nullptr) {
@@ -549,6 +567,7 @@ private:
                 col.origin = l.origin;
                 col.refs = l.refs;
                 col.refs_known = l.refs_known;
+                col.attr = l.attr;
             }
             out.columns.push_back(std::move(col));
             out.positions.push_back(item.pos);
@@ -569,6 +588,7 @@ private:
         }
         for (size_t i = 0; i < head.columns.size(); ++i) {
             head.columns[i].origin = JoinOrigin(head.columns[i].origin, part.columns[i].origin);
+            head.columns[i].attr.Join(part.columns[i].attr);
             // Targets survive only when BOTH sides are references; otherwise a dereference would be a guess.
             if (head.columns[i].refs.empty() || part.columns[i].refs.empty()) {
                 // A reference joined with a non-reference may be a reference with unknown targets.

@@ -34,8 +34,22 @@ constexpr const char* kResolveUnionArity = "PARSE_UNION_ARITY";
 constexpr const char* kResolveUnknownParam = "RESOLVE_UNKNOWN_PARAM";
 constexpr const char* kResolveBadStatement = "RESOLVE_BAD_STATEMENT";
 
+// Where protected content of a value comes from: `fields` are the policy fields (FieldInfo::display) it
+// is read from, `unattributed` is true when some protected part has no such field (a token, a presentation of a
+// reference, a subquery value). An oracle reason names the fields; the host's permission "compare_allowed" covers a
+// value only when it is attributed completely and every field is allowed.
+struct Attribution {
+    std::set<std::string> fields;
+    bool unattributed = false;
+    void Join(const Attribution& o) {
+        fields.insert(o.fields.begin(), o.fields.end());
+        unattributed = unattributed || o.unattributed;
+    }
+};
+
 struct Column {
     std::string name;                   // final result name
+    Attribution attr;
     Origin origin = Origin::Unknown;
     std::vector<std::string> refs;      // target tables when the column holds a reference
     bool refs_known = false;            // see FieldLabel::refs_known
@@ -60,6 +74,7 @@ struct Scope {
 
 struct FieldLabel {
     Origin origin = Origin::Unknown;
+    Attribution attr;
     std::vector<std::string> refs;
     // true: `refs` lists every reference target the value may have (empty: provably not a reference), as for a policy
     // field path, a literal or a primitive-typed operation. false (the default, fail closed): the value may be a

@@ -134,6 +134,15 @@ Origin Combine(Origin inter, Origin fin) {
 FieldLabel Dereference(std::vector<std::string> tables, const std::vector<std::string>& parts, size_t from,
                        Origin inter, const FieldPolicy& policy, const ResolveSink& sink) {
     FieldLabel label;
+    // Protected fields read on the way (the last one and every reference followed); a field of class Unknown, or the
+    // presentation of a table, has no name an oracle reason could report.
+    const auto note_field = [&](const std::string& table, const std::string& field) {
+        const FieldInfo* info = policy.Field(table, field);
+        const FieldClass cls = policy.ClassOf(table, field);
+        if (cls == FieldClass::Open) return;
+        if (info != nullptr && cls == FieldClass::Protected && !info->display.empty()) label.attr.fields.insert(info->display);
+        else label.attr.unattributed = true;
+    };
     bool targets_lost = false;   // a field whose reference targets the policy does not list (FieldInfo::refs_known)
     for (size_t i = from; i < parts.size(); ++i) {
         const bool last = i + 1 == parts.size();
@@ -150,6 +159,7 @@ FieldLabel Dereference(std::vector<std::string> tables, const std::vector<std::s
                 broken = true;
             } else if (last) {
                 table_origin = FromClass(policy.ClassOf(table, parts[i]));
+                note_field(table, parts[i]);
                 if (const FieldInfo* info = policy.Field(table, parts[i])) {
                     for (const std::string& r : info->refs) AddUnique(label.refs, r);
                     targets_lost = targets_lost || !info->refs_known;
@@ -160,6 +170,7 @@ FieldLabel Dereference(std::vector<std::string> tables, const std::vector<std::s
                     broken = true;
                 } else {
                     for (const std::string& r : info->refs) AddUnique(next, r);
+                    note_field(table, parts[i]);
                     step = have_step ? JoinOrigin(step, FromClass(policy.ClassOf(table, parts[i])))
                                      : FromClass(policy.ClassOf(table, parts[i]));
                     have_step = true;
@@ -192,10 +203,13 @@ FieldLabel ResolveInBinding(const Binding& b, const std::vector<std::string>& pa
         label.origin = col->origin;
         label.refs = col->refs;
         label.refs_known = col->refs_known;
+        label.attr = col->attr;
         return label;
     }
     if (col->refs.empty()) return FieldLabel();
-    return Dereference(col->refs, parts, start + 1, col->origin, policy, sink);
+    FieldLabel deref = Dereference(col->refs, parts, start + 1, col->origin, policy, sink);
+    deref.attr.Join(col->attr);
+    return deref;
 }
 
 // A name that resolves in an outer query while an inner query has a policy table that does not list it: the

@@ -52,15 +52,21 @@
 
 namespace lineage::strict {
 
+// `op` and `field` mark an oracle reason: the primitive ("like" | "range" | "strfunc") and the policy
+// field (FieldInfo::display) whose content it probes; `field` is empty when the content cannot be attributed to a
+// field (a token, a presentation, a subquery value).
 struct Reason {
     std::string code;
     Pos pos;
+    std::string op;
+    std::string field;
 };
 
 struct ColumnLabel {
     std::string name;                   // final result name ("" for a wildcard item)
     Origin origin = Origin::Unknown;
     Pos pos;
+    Attribution attr;                   // the policy fields the column reads protected content from
     std::vector<std::string> refs;      // target tables when the column holds a reference
     bool refs_known = false;            // `refs` is complete (FieldLabel::refs_known in scope.h)
 };

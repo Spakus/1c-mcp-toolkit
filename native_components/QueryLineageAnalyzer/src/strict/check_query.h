@@ -44,6 +44,8 @@ struct QueryReason {
     std::string code;
     bool has_pos = false;
     Pos pos;
+    std::string op;      // oracle reason: "like" | "range" | "strfunc" (see analyzer.h Reason)
+    std::string field;   // oracle reason: the policy field; empty when it cannot be attributed
 };
 
 struct QueryCheckResult {

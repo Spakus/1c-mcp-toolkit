@@ -110,6 +110,7 @@ TEST(StrictGate, PiecewiseComparisonsStayUnderWindow) {
     CHECK(Has(Q(kWhere + "К.Наименование > \"М\""), "Q_COMPARE_PROTECTED"));
     CHECK(Has(Q(kWhere + "К.Наименование МЕЖДУ \"А\" И \"Б\""), "Q_COMPARE_PROTECTED"));
     CHECK(Has(Q(kWhere + "ПОДСТРОКА(К.Наименование, 1, 1) = \"А\""), "Q_FUNC_OVER_PROTECTED"));
+    CHECK(Has(Q(kWhere + "ДЛИНАСТРОКИ(К.Наименование) > 3"), "Q_FUNC_OVER_PROTECTED"));
     // equality with a column of another table is a join key, not a filter by a client value
     CHECK(Has(Q("ВЫБРАТЬ К.Ссылка КАК С ИЗ Справочник.Контрагенты КАК К ВНУТРЕННЕЕ СОЕДИНЕНИЕ Справочник.Группы КАК Г "
                 "ПО К.Наименование = Г.Наименование"), "Q_EQ_CLIENT_PARAM"));
@@ -119,6 +120,27 @@ TEST(StrictGate, PiecewiseComparisonsStayUnderWindow) {
     CHECK_EQ(V(C(kCode + "Если Р.Имя > \"М\" Тогда Результат = 1; Иначе Результат = 0; КонецЕсли;")), std::string("confirm"));
     CHECK_EQ(V(C(kCode + "Результат = СтрДлина(Р.Имя);")), std::string("confirm"));
     CHECK_EQ(V(C(kCode + "Результат = КодСимвола(Сред(Р.Имя, 1, 1));")), std::string("confirm"));
+}
+
+// ---- oracle reasons carry the operation and the field ----
+
+TEST(StrictGate, OracleReasonsNameOperationAndField) {
+    const std::string name = kNameField;
+    const std::string inn = kInnField;
+    CHECK(Oracles(Q(kWhere + "К.Наименование ПОДОБНО \"Аб%\"")) ==
+          (std::set<std::string>{"Q_LIKE_PROTECTED/like@" + name}));
+    CHECK(Oracles(Q(kWhere + "К.Наименование > \"М\"")) == (std::set<std::string>{"Q_COMPARE_PROTECTED/range@" + name}));
+    CHECK(Oracles(Q(kWhere + "ПОДСТРОКА(К.Наименование, 1, 1) = \"А\"")).count("Q_FUNC_OVER_PROTECTED/strfunc@" + name) == 1);
+    // two fields in one condition: one reason per field, nothing is dropped as a duplicate
+    CHECK(Oracles(Q(kWhere + "К.Наименование ПОДОБНО \"А%\" ИЛИ К.ИНН ПОДОБНО \"1%\"")) ==
+          (std::set<std::string>{"Q_LIKE_PROTECTED/like@" + name, "Q_LIKE_PROTECTED/like@" + inn}));
+    // ordering by a protected string
+    CHECK(Oracles(Q("ВЫБРАТЬ К.Порядок КАК П ИЗ Справочник.Контрагенты КАК К УПОРЯДОЧИТЬ ПО К.Наименование")) ==
+          (std::set<std::string>{"Q_ORDER_PROTECTED/range@" + name}));
+    // a parse refusal carries no field and no op
+    const Json parse = Q("ВЫБРАТЬ ВЫБРАТЬ");
+    CHECK(!parse["reasons"][0].contains("field"));
+    CHECK(!parse["reasons"][0].contains("op"));
 }
 
 // ---- A fixes ----

@@ -102,11 +102,12 @@ bool ParseFieldInfo(const Json& v, FieldInfo* out) {
     return true;
 }
 
-bool ParseFields(const Json& v, FieldMap* out) {
+bool ParseFields(const Json& v, const std::string& table_display, FieldMap* out) {
     if (!v.is_object()) return false;
     for (auto it = v.begin(); it != v.end(); ++it) {
         FieldInfo info;
         if (!ParseFieldInfo(it.value(), &info)) return false;
+        info.display = table_display + "." + it.key();
         MergeField(*out, NormalizeIdentifierKey(it.key()), std::move(info));
     }
     return true;
@@ -173,7 +174,8 @@ private:
         for (auto& f : data.fields) MergeField(it->second.fields, f.first, std::move(f.second));
     }
 
-    static bool ReadSections(const Json& table, const std::string& table_key, FieldClass presentation, FieldPolicy* policy) {
+    static bool ReadSections(const Json& table, const std::string& table_key, const std::string& table_display,
+                             FieldClass presentation, FieldPolicy* policy) {
         const auto sections = table.find("tabular_sections");
         if (sections == table.end()) return true;
         if (!sections->is_object()) return false;
@@ -181,8 +183,9 @@ private:
             if (!it.value().is_object()) return false;
             FieldPolicy::TableData data;
             data.presentation = presentation;
+            const std::string section_display = table_display + "." + it.key();
             const auto fields = it.value().find("fields");
-            if (fields != it.value().end() && !ParseFields(*fields, &data.fields)) return false;
+            if (fields != it.value().end() && !ParseFields(*fields, section_display, &data.fields)) return false;
             AddTable(policy, table_key + "." + NormalizeIdentifierKey(it.key()), std::move(data));
         }
         return true;
@@ -199,11 +202,11 @@ private:
             const auto presentation = table.find("presentation");
             if (presentation != table.end() && !ParseClass(*presentation, &data.presentation)) return false;
             const auto fields = table.find("fields");
-            if (fields != table.end() && !ParseFields(*fields, &data.fields)) return false;
+            if (fields != table.end() && !ParseFields(*fields, it.key(), &data.fields)) return false;
             const std::string key = NormalizeIdentifierKey(it.key());
             const FieldClass table_presentation = data.presentation;
             AddTable(policy, key, std::move(data));
-            if (!ReadSections(table, key, table_presentation, policy)) return false;
+            if (!ReadSections(table, key, it.key(), table_presentation, policy)) return false;
         }
         return true;
     }
@@ -221,7 +224,7 @@ private:
             data.base = base->get<std::string>();
             if (policy->tables_.find(NormalizeIdentifierKey(data.base)) == policy->tables_.end()) return false;
             const auto extra = vt.find("extra_fields");
-            if (extra != vt.end() && !ParseFields(*extra, &data.extra_fields)) return false;
+            if (extra != vt.end() && !ParseFields(*extra, it.key(), &data.extra_fields)) return false;
             const std::string key = NormalizeIdentifierKey(it.key());
             // no silent override, and a virtual table never shadows a real one (the base lookup would loop)
             if (policy->virtuals_.find(key) != policy->virtuals_.end()) return false;

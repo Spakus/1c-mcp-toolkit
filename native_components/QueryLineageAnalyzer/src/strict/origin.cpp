@@ -33,7 +33,7 @@ CallClass ClassifyCall(const std::string& name) {
     static const std::set<std::string> kTypeOf = {"ТИПЗНАЧЕНИЯ", "VALUETYPE"};
     static const std::set<std::string> kPlain = {
         "ЕСТЬNULL", "ISNULL", "ПОДСТРОКА", "SUBSTRING", "ГОД", "YEAR", "КВАРТАЛ", "QUARTER", "МЕСЯЦ", "MONTH",
-        "ДЕНЬГОДА", "DAYOFYEAR", "ДЕНЬ", "DAY", "НЕДЕЛЯ", "WEEK", "ДЕНЬНЕДЕЛИ", "WEEKDAY", "ЧАС", "HOUR", "МИНУТА",
+        "ДЛИНАСТРОКИ", "STRINGLENGTH", "ДЕНЬГОДА", "DAYOFYEAR", "ДЕНЬ", "DAY", "НЕДЕЛЯ", "WEEK", "ДЕНЬНЕДЕЛИ", "WEEKDAY", "ЧАС", "HOUR", "МИНУТА",
         "MINUTE", "СЕКУНДА", "SECOND", "НАЧАЛОПЕРИОДА", "BEGINOFPERIOD", "КОНЕЦПЕРИОДА", "ENDOFPERIOD",
         "ДОБАВИТЬКДАТЕ", "DATEADD", "РАЗНОСТЬДАТ", "DATEDIFF", "ДАТАВРЕМЯ", "DATETIME"};
     const std::string key = NormalizeIdentifierKey(name);
@@ -44,6 +44,16 @@ CallClass ClassifyCall(const std::string& name) {
     if (Listed(kTypeOf, key)) return CallClass::TypeOf;
     if (Listed(kPlain, key)) return CallClass::Plain;
     return CallClass::Unrecognized;
+}
+
+bool IsStringLengthFunction(const std::string& call_name) {
+    const std::string key = NormalizeIdentifierKey(call_name);
+    return key == "ДЛИНАСТРОКИ" || key == "STRINGLENGTH";
+}
+
+bool IsStringFunction(const std::string& call_name) {
+    const std::string key = NormalizeIdentifierKey(call_name);
+    return key == "ПОДСТРОКА" || key == "SUBSTRING" || IsStringLengthFunction(call_name);
 }
 
 int PeriodArgIndex(const std::string& call_name) {
