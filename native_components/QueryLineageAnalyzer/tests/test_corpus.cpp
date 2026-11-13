@@ -17,7 +17,7 @@
 
 // Data-driven corpus runner. A corpus is a directory of *.case files plus an optional policy.json:
 //   // kind: query | code
-//   // expect: safe | confirm | incomplete
+//   // expect: safe | confirm | deny | incomplete
 //   // reason: <code>        (optional, repeatable; each must be among the reasons)
 //   // risk: <code>          (optional, repeatable; code cases)
 //   // label: <path> = <lbl> (optional, repeatable; code cases: result_labels[path] must equal lbl)
@@ -82,8 +82,8 @@ std::string ParseCase(const std::string& raw, Case* c) {
             c->kind = value;
         } else if (key == "expect") {
             if (!c->expect.empty()) return "duplicate 'expect'";
-            if (value != "safe" && value != "confirm" && value != "incomplete") {
-                return "expect must be safe, confirm or incomplete";
+            if (value != "safe" && value != "confirm" && value != "incomplete" && value != "deny") {
+                return "expect must be safe, confirm, deny or incomplete";
             }
             c->expect = value;
         } else if (key == "reason") {
