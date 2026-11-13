@@ -791,3 +791,19 @@ TEST(StrictGate, QualifiedDenyEntryIsNotBypassedByAliasing) {
     // another name that merely contains the manager's name is not the manager
     CHECK(DenyOf(entry, "МойМенеджерДва = 1; Результат = МойМенеджерДва;") != "deny");
 }
+
+// ---- a string function over a reference reads its presentation ----
+
+TEST(StrictGate, StringFunctionOverReferenceTakesThePresentationLabel) {
+    for (const char* text : {
+             "ВЫБРАТЬ ДЛИНАСТРОКИ(Д.Контрагент) КАК Д ИЗ Документ.Реализация КАК Д",
+             "ВЫБРАТЬ Д.Номер КАК Н ИЗ Документ.Реализация КАК Д ГДЕ ДЛИНАСТРОКИ(Д.Контрагент) > 3",
+             "ВЫБРАТЬ ПОДСТРОКА(Д.Контрагент, 1, 1) КАК П ИЗ Документ.Реализация КАК Д"}) {
+        const Json j = Q(text);
+        CHECK_EQ(V(j), std::string("confirm"));
+    }
+    // a reference whose presentation is open, and a string function over an open string column
+    CHECK_EQ(V(Q("ВЫБРАТЬ ДЛИНАСТРОКИ(К.Группа) КАК Д ИЗ Справочник.Контрагенты КАК К")), std::string("safe"));
+    CHECK_EQ(V(Q("ВЫБРАТЬ ДЛИНАСТРОКИ(Г.Наименование) КАК Д ИЗ Справочник.Группы КАК Г")), std::string("safe"));
+    CHECK_EQ(V(Q("ВЫБРАТЬ ПОДСТРОКА(Г.Наименование, 1, 2) КАК Д ИЗ Справочник.Группы КАК Г")), std::string("safe"));
+}

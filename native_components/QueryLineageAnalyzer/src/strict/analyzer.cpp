@@ -452,7 +452,18 @@ private:
     }
 
     FieldLabel LabelCall(const Expr& e, const Scope& scope, int depth, const AliasInfo* aliases) {
-        const std::vector<FieldLabel> operands = LabelOperands(e, scope, depth, aliases, PeriodArgIndex(e.text));
+        std::vector<FieldLabel> operands = LabelOperands(e, scope, depth, aliases, PeriodArgIndex(e.text));
+        // A string function over a reference reads its presentation, stored data of the target (ДЛИНАСТРОКИ(Ссылка)).
+        if (IsStringFunction(e.text) && !operands.empty() && !operands[0].refs.empty() &&
+            operands[0].origin != Origin::Unknown) {
+            FieldLabel& x = operands[0];
+            Origin presentation = PresentationOfTargets(x.refs);
+            if (x.origin != Origin::Open && x.origin != Origin::Client) presentation = JoinOrigin(presentation, Transform(x.origin));
+            x.origin = presentation;
+            x.attr.unattributed = true;   // a presentation is not a policy field
+            x.refs.clear();
+            x.refs_known = true;
+        }
         switch (ClassifyCall(e.text)) {
             case CallClass::Count: return Plain(Origin::Open, true);   // a number, not stored data
             case CallClass::TypeOf: {
