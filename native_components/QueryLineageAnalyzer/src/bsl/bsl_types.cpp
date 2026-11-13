@@ -964,7 +964,17 @@ private:
         } else if (input) {
             CheckOp(e.pos, *input, string_function ? "strfunc" : "");
         }
+        if (rule.result == Ty::Array) return ArrayResult(e, out, Ty::String);   // СтрРазделить: strings
         return Typed(rule.result, out);
+    }
+
+    // An array a platform function returns: a collection of its own, every element carries `content`.
+    VType ArrayResult(const Expr& call, Origin content, Ty element = Ty::Unknown) {
+        VType v = Typed(Ty::Array, Origin::Open);
+        v.objs.insert(&call);
+        state_.objects[&call].kind = Ty::Array;
+        Store(v, Typed(element, content), call.pos);
+        return v;
     }
 
     VType EvalNew(const Expr& e) {
@@ -1124,6 +1134,15 @@ private:
                 if (m == AllowlistKey("ВыгрузитьКолонку")) return UnloadColumn(recv, *e.args[1], e);
                 if (m == AllowlistKey("Сортировать")) return SortTable(recv, *e.args[1], e);
                 if (m == AllowlistKey("Итог")) return ColumnTotal(recv, *e.args[1], e);
+                if (m == AllowlistKey("НайтиСтроки")) {
+                    // A filter by equality: client filter values are fine, tainted ones are an oracle.
+                    // The rows found keep the labels of the table.
+                    const Origin filter = ValueLabel(args[0]);
+                    CheckOp(e.pos, filter);
+                    const Origin table = ValueLabel(recv);
+                    return ArrayResult(e, JoinOrigin(IsTainted(filter) ? Transform(filter) : Origin::Open,
+                                                     IsTainted(table) ? table : Origin::Open));
+                }
                 return Typed(rule.result, Fresh(ShapeOf(recv)));
             case Ty::Array:
             case Ty::Structure:
@@ -1133,6 +1152,13 @@ private:
                 // A scalar receiver: the method reads the value itself.
                 CheckOp(e.pos, recv.label);
                 return Typed(rule.result, Transform(recv.label));
+            case Ty::ManagerRoot: {
+                // Read-only predicates of the manager of a kind of tables: the arguments are read as they are.
+                std::optional<Origin> input;
+                for (const VType& a : args) JoinInto(input, ValueLabel(a));
+                if (input) CheckOp(e.pos, *input);
+                return Typed(rule.result, input ? Transform(*input) : Origin::Open);
+            }
             case Ty::Metadata:
             case Ty::MetaCollection:
             case Ty::Manager: {

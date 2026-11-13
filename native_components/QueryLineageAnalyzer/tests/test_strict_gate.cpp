@@ -240,6 +240,23 @@ TEST(StrictGate, EmptinessThroughCastToString) {
     CHECK_EQ(V(Q(head + "ВЫРАЗИТЬ(П.Текст КАК ЧИСЛО(10)) = 0" + tail)), std::string("confirm"));
 }
 
+// ---- D: pure read platform functions ----
+
+TEST(StrictGate, PureReadFunctionsAreAllowlisted) {
+    CHECK_EQ(V(C("М = Новый Массив; Для Каждого Имя Из СтрРазделить(\"а,б\", \",\") Цикл М.Добавить(Имя); КонецЦикла; Результат = М;")),
+             std::string("safe"));
+    CHECK_EQ(V(C("Результат = Pow(2, 3) + СтрСравнить(\"a\", \"b\");")), std::string("safe"));
+    CHECK_EQ(V(C("Р = Справочники.Контрагенты.НайтиПоКоду(\"1\"); Результат = Р.Пустая();")), std::string("safe"));
+    // over protected data they are string functions, like Найти and Сред
+    CHECK_EQ(V(C(kCode + "М = Новый Массив; Для Каждого Ч Из СтрРазделить(Р.Имя, \",\") Цикл М.Добавить(СтрДлина(Ч)); "
+                         "КонецЦикла; Результат = М;")), std::string("confirm"));
+    CHECK_EQ(V(C(kCode + "Результат = СтрСравнить(Р.Имя, \"М\");")), std::string("confirm"));
+    // not allowlisted: a prefix search is possible
+    CHECK(Has(C("Результат = Справочники.Контрагенты.НайтиПоНаименованию(\"А\");"), "C_UNKNOWN_METHOD"));
+    // an equality lookup by a protected value is an oracle between protected values
+    CHECK_EQ(V(C(kCode + "Результат = Справочники.Контрагенты.НайтиПоКоду(Р.Имя);")), std::string("confirm"));
+}
+
 TEST(StrictGate, KeywordAliasesStayRefused) {
     for (const char* alias : {"Есть", "И", "Истина"}) {
         CHECK(Has(Q(std::string("ВЫБРАТЬ К.Порядок КАК ") + alias + " ИЗ Справочник.Контрагенты КАК К"), "Q_PARSE_EXPECTED"));

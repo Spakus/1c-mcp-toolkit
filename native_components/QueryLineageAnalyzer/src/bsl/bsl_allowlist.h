@@ -170,6 +170,12 @@ inline constexpr GlobalRule kGlobalRules[] = {
     {"СокрЛ", "TrimL", Ty::String, Taint::Open, 1, 1, ArgRule::Any},
     {"СокрП", "TrimR", Ty::String, Taint::Open, 1, 1, ArgRule::Any},
     {"СтрСоединить", "StrConcat", Ty::String, Taint::Open, 1, 2, ArgRule::Any},
+    // Added: read-only, no side effects (docsearch: Глобальный контекст.СтрРазделить,
+    // StrCompare, XMLСтрока, Pow). Over protected data they are C_FUNC_OVER_PROTECTED like the other string functions.
+    {"СтрРазделить", "StrSplit", Ty::Array, Taint::Open, 2, 3, ArgRule::Any},
+    {"СтрСравнить", "StrCompare", Ty::Number, Taint::Open, 2, 3, ArgRule::Any},
+    {"XMLСтрока", "XMLString", Ty::String, Taint::Open, 1, 1, ArgRule::Any},
+    {"Pow", "Pow", Ty::Number, Taint::Open, 2, 2, ArgRule::Any},
     // Session rights and configuration state: Boolean answers about the configuration, not stored data.
     {"РольДоступна", "IsInRole", Ty::Boolean, Taint::Open, 1, 1, ArgRule::Any},
     {"ПравоДоступа", "AccessRight", Ty::Boolean, Taint::Open, 2, 4, ArgRule::Any},
@@ -230,6 +236,9 @@ inline constexpr MethodRule kMethodRules[] = {
     {Ty::Selection, "Количество", "Count", Ty::Number, Taint::Open, 0, 0, ArgRule::Any},
 
     {Ty::ValueTable, "Количество", "Count", Ty::Number, Taint::Open, 0, 0, ArgRule::Any},
+    // The rows that match a filter structure (docsearch: ТаблицаЗначений.НайтиСтроки): an array, its elements carry
+    // the labels of the table and of the filter values.
+    {Ty::ValueTable, "НайтиСтроки", "FindRows", Ty::Array, Taint::Open, 1, 1, ArgRule::Any},
     // The sum of one literal column; over a tainted column it is C_FUNC_OVER_PROTECTED.
     {Ty::ValueTable, "Итог", "Total", Ty::Number, Taint::Open, 1, 1, ArgRule::LiteralString},
     {Ty::ValueTable, "ВыгрузитьКолонку", "UnloadColumn", Ty::Array, Taint::Propagate, 1, 1, ArgRule::LiteralString},
@@ -265,6 +274,13 @@ inline constexpr MethodRule kMethodRules[] = {
     // НайтиПоКоду (equality oracles over protected strings), not Выбрать / СоздатьЭлемент / ПолучитьОбъект.
     {Ty::Manager, "ПолучитьСсылку", "GetRef", Ty::Ref, Taint::Open, 0, 1, ArgRule::Any},
     {Ty::Manager, "ПустаяСсылка", "EmptyRef", Ty::Ref, Taint::Open, 0, 0, ArgRule::Any},
+    // A lookup by a code is a filter by equality: over a client value it is open, over a protected
+    // value C_FUNC_OVER_PROTECTED. The result is a reference of the manager's table; its presentation stays protected.
+    {Ty::Manager, "НайтиПоКоду", "FindByCode", Ty::Ref, Taint::Open, 1, 2, ArgRule::Any},
+    // A read-only predicate (docsearch: ПланыОбменаМенеджер.ИзменениеЗарегистрировано); the arguments are read as
+    // references, not as presentations.
+    {Ty::ManagerRoot, "ИзменениеЗарегистрировано", "IsChangeRecorded", Ty::Boolean, Taint::Propagate, 2, 2,
+     ArgRule::Any},
 };
 
 inline constexpr PropertyRule kPropertyRules[] = {
