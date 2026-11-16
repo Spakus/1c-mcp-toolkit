@@ -1,0 +1,6 @@
+// kind: code
+// expect: deny
+// reason: C_EFFECT_DENIED
+// risk: R_WRITE
+НачатьТранзакцию();
+Результат = ТранзакцияАктивна();

@@ -79,7 +79,7 @@ std::string ToJson(const Outcome& o) {
 Outcome Refuse(const std::string& code, const std::string& reason_code, const Pos& pos) {
     Outcome o;
     o.reasons.push_back(CodeReason{reason_code, pos});
-    o.risks = RefusedCodeRisks(code, reason_code);
+    o.risks = RefusedCodeRisks(code, reason_code, pos);
     return o;
 }
 

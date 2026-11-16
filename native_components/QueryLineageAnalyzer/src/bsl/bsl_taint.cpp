@@ -282,6 +282,16 @@ const AllowedNames& Allowed() {
     return names;
 }
 
+// A name of kPureReaders (AllowlistKey form, exact). The caller must also check the call shape: a plain call, no argument.
+bool IsPureReader(const std::string& key) {
+    static const std::set<std::string> keys = [] {
+        std::set<std::string> k;
+        for (const char* n : kPureReaders) k.insert(AllowlistKey(n));
+        return k;
+    }();
+    return keys.count(key) != 0;
+}
+
 // Classes of one name (AllowlistKey already applied). An allowlisted method name (УстановитьПараметр) is exempt from
 // the Prefix rows: it is the allowlist's own, on its own receiver type; on any other receiver the unknown-effect
 // risk applies.
@@ -354,9 +364,10 @@ void CollectExprNames(const Expr* root, RiskCollector& risks) {
         if (!e) continue;
         const bool named = e->kind == Expr::K::Var || e->kind == Expr::K::Member || e->kind == Expr::K::Call ||
                            e->kind == Expr::K::MethodCall || e->kind == Expr::K::New;
-        if (named) risks.Name(e->text, e->pos);
-        // Syntactic pass, independent of the type walk: a callee or "Новый" type that is on no allowlist table.
         const std::string key = AllowlistKey(e->text);
+        const bool pure_reader = e->kind == Expr::K::Call && e->args.empty() && IsPureReader(key);
+        if (named && !pure_reader) risks.Name(e->text, e->pos);
+        // Syntactic pass, independent of the type walk: a callee or "Новый" type that is on no allowlist table.
         if ((e->kind == Expr::K::Call && !Allowed().globals.count(key)) ||
             (e->kind == Expr::K::New && !Allowed().news.count(key)) ||
             (e->kind == Expr::K::MethodCall && !Allowed().methods.count(key))) {
@@ -607,11 +618,16 @@ std::vector<CodeReason> ScanRisksInSource(const std::string& utf8) {
             const bool after_dot = i > 0 && tokens[i - 1].kind == Bt::Dot;
             const bool after_new = i > 0 && tokens[i - 1].kind == Bt::Keyword && tokens[i - 1].kw == Bk::New;
             if (t.kind == Bt::Unknown) refused = true;
-            if (t.kind == Bt::Identifier || t.kind == Bt::Keyword) risks.Name(t.text, pos, t.mixed_script);
-            // Syntactic mirror of the tree pass: a callee or "Новый" type that is on no allowlist table.
-            const bool name = t.kind == Bt::Identifier || (t.kind == Bt::Keyword && after_dot);
             const bool call = i + 1 < tokens.size() && tokens[i + 1].kind == Bt::LParen;
             const std::string key = AllowlistKey(t.text);
+            // A pure reader written as a plain call with no argument: `Имя ( )` and nothing else.
+            const bool pure_reader = t.kind == Bt::Identifier && !t.mixed_script && !after_dot && !after_new && call &&
+                                     i + 2 < tokens.size() && tokens[i + 2].kind == Bt::RParen && IsPureReader(key);
+            if ((t.kind == Bt::Identifier || t.kind == Bt::Keyword) && !pure_reader) {
+                risks.Name(t.text, pos, t.mixed_script);
+            }
+            // Syntactic mirror of the tree pass: a callee or "Новый" type that is on no allowlist table.
+            const bool name = t.kind == Bt::Identifier || (t.kind == Bt::Keyword && after_dot);
             if (name && call && !after_new &&
                 !(after_dot ? Allowed().methods.count(key) : Allowed().globals.count(key))) {
                 risks.Add(kRiskUnknown, pos);
@@ -976,9 +992,12 @@ std::vector<CodeReason> ScanComputedExecution(const std::string& utf8) {
     return out;
 }
 
-std::vector<CodeReason> RefusedCodeRisks(const std::string& utf8, const std::string& parse_error_code) {
+std::vector<CodeReason> RefusedCodeRisks(const std::string& utf8, const std::string& parse_error_code,
+                                         const Pos& error_pos) {
     std::vector<CodeReason> out = ScanRisksInSource(utf8);
-    std::vector<CodeReason> more{CodeReason{"R_UNKNOWN_EFFECT", Pos{}}};   // no tree: nothing is known about the code
+    // No tree: nothing is known about the code. The marker sits where the parser stopped (the refusal's own position),
+    // not at 1:1, where it would read as a second risk of the first token.
+    std::vector<CodeReason> more{CodeReason{"R_UNKNOWN_EFFECT", error_pos}};
     try {
         if (parse_error_code == "C_EVAL" || parse_error_code == "C_DYNAMIC_NEW") {
             more.push_back(CodeReason{"R_PROTECTION", Pos{}});

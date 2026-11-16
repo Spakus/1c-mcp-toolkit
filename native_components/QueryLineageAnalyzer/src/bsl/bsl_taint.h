@@ -64,7 +64,8 @@ bool ParseTokenTable(const std::string& policy_json, TokenTable& out);
 std::vector<CodeReason> ScanRisksInSource(const std::string& utf8);
 // Risks of code the parser refused: ScanRisksInSource plus R_UNKNOWN_EFFECT (no tree, nothing proven); for C_EVAL and
 // C_DYNAMIC_NEW also R_PROTECTION and a raw scan of the string literals (alone and joined).
-std::vector<CodeReason> RefusedCodeRisks(const std::string& utf8, const std::string& parse_error_code);
+std::vector<CodeReason> RefusedCodeRisks(const std::string& utf8, const std::string& parse_error_code,
+                                         const Pos& error_pos = Pos{});
 void MergeRisks(std::vector<CodeReason>& into, const std::vector<CodeReason>& more);
 
 // Effects the runtime sandbox does not cover: names the host lists in the policy ("deny_effects",

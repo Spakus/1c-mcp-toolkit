@@ -143,6 +143,10 @@ inline constexpr GlobalRule kGlobalRules[] = {
     {"ПустаяСтрока", "IsBlankString", Ty::Boolean, Taint::Emptiness, 1, 1, ArgRule::Any},
     // Dates: pure functions of their arguments (the session date is not stored data).
     {"ТекущаяДатаСеанса", "CurrentSessionDate", Ty::Date, Taint::Open, 0, 0, ArgRule::Any},
+    // Pure session-state readers: no argument, no data, an Open scalar (БезопасныйРежим may return a profile name string;
+    // either way it is not stored data). See kPureReaders for their risk exemption.
+    {"БезопасныйРежим", "SafeMode", Ty::Boolean, Taint::Open, 0, 0, ArgRule::Any},
+    {"ТранзакцияАктивна", "TransactionActive", Ty::Boolean, Taint::Open, 0, 0, ArgRule::Any},
     {"НачалоДня", "BegOfDay", Ty::Date, Taint::Open, 1, 1, ArgRule::Any},
     {"КонецДня", "EndOfDay", Ty::Date, Taint::Open, 1, 1, ArgRule::Any},
     {"НачалоНедели", "BegOfWeek", Ty::Date, Taint::Open, 1, 1, ArgRule::Any},
@@ -327,6 +331,14 @@ struct RiskRule {
     RiskClass cls;
     RiskMatch match;
 };
+
+// Exactly these global calls, written with NO argument (БезопасныйРежим(), ТранзакцияАктивна()), only read session
+// state: they raise no risk although their names match a risk row below (Contains "БезопасныйРежим", "Транзакц").
+// Applied before the rows, to a plain Call node / identifier token only: a method (Х.БезопасныйРежим()), a call with
+// an argument, a variable, a "Новый" type, a setter (УстановитьБезопасныйРежим) or a longer name never qualifies.
+// Keys are AllowlistKey forms (see PureReaderKeys in bsl_taint.cpp).
+inline constexpr const char* kPureReaders[] = {"БезопасныйРежим", "SafeMode", "ТранзакцияАктивна",
+                                               "TransactionActive"};
 
 inline constexpr RiskRule kRiskRules[] = {
     // ---- Protection

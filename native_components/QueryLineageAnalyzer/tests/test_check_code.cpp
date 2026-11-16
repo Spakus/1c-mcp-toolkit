@@ -1,6 +1,7 @@
 #include <nlohmann/json.hpp>
 
 #include <cstdlib>
+#include <set>
 #include <iostream>
 #include <string>
 #include <utility>
@@ -520,4 +521,115 @@ TEST(CheckCode, MixedScriptNamesOfThePolicyPass) {
     CHECK_EQ(Verdict(text), std::string("incomplete"));
     CHECK_EQ(text["missing_tables"][0].get<std::string>(), std::string("РегистрСведений.Правила"));
     CHECK_EQ(Verdict(Check("Pезультат = 1;")), std::string("confirm"));   // no table to ask for
+}
+
+namespace {
+
+// "code1,code2" of the reasons / risks of an answer, sorted and without repeats.
+std::string CodeSet(const Json& j, const char* key) {
+    std::set<std::string> codes;
+    for (const Json& r : j[key]) codes.insert(r["code"].get<std::string>());
+    std::string out;
+    for (const std::string& c : codes) out += (out.empty() ? "" : ",") + c;
+    return out;
+}
+
+}  // namespace
+
+// B4: the no-argument calls БезопасныйРежим() / SafeMode() / ТранзакцияАктивна() / TransactionActive() read session
+// state, not data: no reason, no risk.
+TEST(CheckCode, PureSessionReadersAreSafeWithoutRisks) {
+    const char* const kCodes[] = {
+        "Результат = БезопасныйРежим();", "Результат = SafeMode();", "Результат = ТранзакцияАктивна();",
+        "Результат = TransactionActive();", "Результат = безопасныйрежим();", "Результат = БезопасныйРежим( );",
+        "Результат = БезопасныйРежим\n();", "Если ТранзакцияАктивна() Тогда\n    Результат = 1;\nКонецЕсли;",
+        "Если НЕ БезопасныйРежим() Тогда\n    Результат = 1;\nКонецЕсли;"};
+    for (const char* code : kCodes) {
+        const Json j = Check(code);
+        CHECK_EQ(Verdict(j), std::string("safe"));
+        CHECK_EQ(CodeSet(j, "reasons"), std::string());
+        CHECK_EQ(CodeSet(j, "risks"), std::string());
+    }
+    // A reader next to otherwise safe code stays safe; a risk of the neighbour is still reported.
+    const Json mixed = Check("Если ТранзакцияАктивна() Тогда\n    УстановитьБезопасныйРежим(Истина);\nКонецЕсли;\nРезультат = 1;");
+    CHECK(Verdict(mixed) != std::string("safe"));
+    CHECK(HasRisk(mixed, "R_PROTECTION"));
+}
+
+// B4: what is not the exact no-argument call keeps today's verdict and risk classes (pinned before the change; a call
+// with an argument now fails the arity check instead of C_UNKNOWN_IDENT, still confirm with its risk).
+TEST(CheckCode, SessionSettersAndLookalikesKeepTheirVerdicts) {
+    struct Pin {
+        const char* code;
+        const char* verdict;
+        const char* reasons;
+        const char* risks;
+    };
+    const Pin kPins[] = {
+        {"УстановитьБезопасныйРежим(Истина);\nРезультат = 1;", "deny", "C_EFFECT_DENIED,C_UNKNOWN_IDENT",
+         "R_PROTECTION,R_UNKNOWN_EFFECT,R_WRITE"},
+        {"УстановитьОтключениеБезопасногоРежима(Истина);\nРезультат = 1;", "deny", "C_EFFECT_DENIED,C_UNKNOWN_IDENT",
+         "R_PROTECTION,R_UNKNOWN_EFFECT,R_WRITE"},
+        {"ОтключениеБезопасногоРежима();\nРезультат = 1;", "confirm", "C_UNKNOWN_IDENT", "R_PROTECTION,R_UNKNOWN_EFFECT"},
+        {"SetSafeMode(True);\nРезультат = 1;", "deny", "C_EFFECT_DENIED,C_UNKNOWN_IDENT",
+         "R_PROTECTION,R_UNKNOWN_EFFECT,R_WRITE"},
+        {"SetSafeModeDisabled(True);\nРезультат = 1;", "deny", "C_EFFECT_DENIED,C_UNKNOWN_IDENT",
+         "R_PROTECTION,R_UNKNOWN_EFFECT,R_WRITE"},
+        {"Результат = БезопасныйРежим(\"x\");", "confirm", "C_BAD_ARGS", "R_PROTECTION"},
+        {"Результат = БезопасныйРежим(1, 2);", "confirm", "C_BAD_ARGS", "R_PROTECTION"},
+        {"Результат = SafeMode(\"x\");", "confirm", "C_BAD_ARGS", "R_PROTECTION"},
+        {"Результат = ТранзакцияАктивна(1);", "confirm", "C_BAD_ARGS", "R_WRITE"},
+        {"Результат = Х.БезопасныйРежим();", "confirm", "C_COMMON_MODULE,C_UNLABELED_RESULT",
+         "R_PROTECTION,R_UNKNOWN_EFFECT"},
+        {"Результат = Х.ТранзакцияАктивна();", "confirm", "C_COMMON_MODULE,C_UNLABELED_RESULT",
+         "R_UNKNOWN_EFFECT,R_WRITE"},
+        {"Результат = ЭтотОбъект.БезопасныйРежим();", "confirm", "C_UNKNOWN_IDENT,C_UNLABELED_RESULT",
+         "R_PROTECTION,R_UNKNOWN_EFFECT"},
+        {"Результат = БезопасныйРежимХ();", "confirm", "C_UNKNOWN_IDENT,C_UNLABELED_RESULT",
+         "R_PROTECTION,R_UNKNOWN_EFFECT"},
+        {"Результат = ХБезопасныйРежим();", "confirm", "C_UNKNOWN_IDENT,C_UNLABELED_RESULT",
+         "R_PROTECTION,R_UNKNOWN_EFFECT"},
+        {"Результат = ТранзакцияАктивнаХ();", "confirm", "C_UNKNOWN_IDENT,C_UNLABELED_RESULT",
+         "R_UNKNOWN_EFFECT,R_WRITE"},
+        {"Результат = Новый БезопасныйРежим();", "confirm", "C_UNKNOWN_TYPE,C_UNLABELED_RESULT",
+         "R_PROTECTION,R_UNKNOWN_EFFECT"},
+        {"БезопасныйРежим = 1;\nРезультат = БезопасныйРежим;", "safe", "", "R_PROTECTION"},   // a variable
+        {"Результат = БезопасныйРежим;", "confirm", "C_UNKNOWN_IDENT,C_UNLABELED_RESULT", "R_PROTECTION"},
+    };
+    for (const Pin& p : kPins) {
+        const Json j = Check(p.code);
+        CHECK_EQ(Verdict(j), std::string(p.verdict));
+        CHECK_EQ(CodeSet(j, "reasons"), std::string(p.reasons));
+        CHECK_EQ(CodeSet(j, "risks"), std::string(p.risks));
+    }
+}
+
+// B4: the reader exemption lives in the checker's tree pass and in the token pass alike: a reader whose tree the parser
+// refused is still shown with its risk when it is not the plain no-argument call.
+TEST(CheckCode, ReaderExemptionNeedsTheExactCallShape) {
+    CHECK(HasRisk(Check("Результат = БезопасныйРежим(\"x\") +;"), "R_PROTECTION"));   // refused tree, with an argument
+    CHECK(HasRisk(Check("Результат = Х.БезопасныйРежим() +;"), "R_PROTECTION"));
+    CHECK(!HasRisk(Check("Результат = БезопасныйРежим() +;"), "R_PROTECTION"));       // refused tree, plain reader
+}
+
+// B5: the synthetic R_UNKNOWN_EFFECT of a refused tree carries the refusal's own position (not 1:1), once.
+TEST(CheckCode, RefusalRiskSitsAtTheRefusalPosition) {
+    std::string code = "Х = НеизвестнаяФункцияА(1);\n";
+    for (int i = 0; i < 2500; ++i) code += "Результат = 1;\n";
+    const Json j = Check(code);
+    CHECK_EQ(Verdict(j), std::string("confirm"));
+    const Json* limit = nullptr;
+    for (const Json& r : j["reasons"]) {
+        if (r["code"].get<std::string>() == "C_LIMIT") limit = &r;
+    }
+    CHECK(limit != nullptr);
+    if (!limit) return;
+    int at_limit = 0, at_origin = 0;
+    for (const Json& r : j["risks"]) {
+        if (r["code"].get<std::string>() != "R_UNKNOWN_EFFECT") continue;
+        if (r["line"] == (*limit)["line"] && r["col"] == (*limit)["col"]) ++at_limit;
+        if (r["line"] == 1 && r["col"] == 1) ++at_origin;
+    }
+    CHECK_EQ(at_limit, 1);
+    CHECK_EQ(at_origin, 0);
 }
