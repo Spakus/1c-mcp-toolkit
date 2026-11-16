@@ -39,7 +39,7 @@
 			<TitleLocation>Top</TitleLocation>
 			<Width>70</Width>
 			<AutoMaxWidth>false</AutoMaxWidth>
-			<Height>3</Height>
+			<Height>2</Height>
 			<HorizontalStretch>true</HorizontalStretch>
 			<MultiLine>true</MultiLine>
 			<ContextMenu name="ПолеПричиныКонтекстноеМеню" id="108"/>
@@ -57,7 +57,7 @@
 			<TitleLocation>Top</TitleLocation>
 			<Width>70</Width>
 			<AutoMaxWidth>false</AutoMaxWidth>
-			<Height>3</Height>
+			<Height>2</Height>
 			<HorizontalStretch>true</HorizontalStretch>
 			<MultiLine>true</MultiLine>
 			<ContextMenu name="ПолеРискиКонтекстноеМеню" id="111"/>
@@ -75,7 +75,7 @@
 			<TitleLocation>Top</TitleLocation>
 			<Width>70</Width>
 			<AutoMaxWidth>false</AutoMaxWidth>
-			<Height>3</Height>
+			<Height>2</Height>
 			<HorizontalStretch>true</HorizontalStretch>
 			<MultiLine>true</MultiLine>
 			<ContextMenu name="ПолеПоляСравненияКонтекстноеМеню" id="129"/>
@@ -93,7 +93,7 @@
 			<TitleLocation>Top</TitleLocation>
 			<Width>70</Width>
 			<AutoMaxWidth>false</AutoMaxWidth>
-			<Height>3</Height>
+			<Height>2</Height>
 			<HorizontalStretch>true</HorizontalStretch>
 			<MultiLine>true</MultiLine>
 			<ContextMenu name="ПолеОбоснованиеКонтекстноеМеню" id="114"/>
@@ -111,8 +111,9 @@
 			<TitleLocation>Top</TitleLocation>
 			<Width>70</Width>
 			<AutoMaxWidth>false</AutoMaxWidth>
-			<Height>12</Height>
+			<Height>8</Height>
 			<HorizontalStretch>true</HorizontalStretch>
+			<VerticalStretch>true</VerticalStretch>
 			<MultiLine>true</MultiLine>
 			<Font faceName="Courier New" height="10" bold="false" italic="false" underline="false" strikeout="false" kind="Absolute" scale="100"/>
 			<ContextMenu name="ПолеТекстКПодтверждениюКонтекстноеМеню" id="117"/>
@@ -141,11 +142,15 @@
 					<Type>UsualButton</Type>
 					<CommandName>Form.Command.Подтвердить</CommandName>
 					<TextColor>web:Green</TextColor>
+					<Width>24</Width>
+					<HorizontalStretch>false</HorizontalStretch>
 					<ExtendedTooltip name="КнопкаПодтвердитьРасширеннаяПодсказка" id="125"/>
 				</Button>
 				<Button name="КнопкаЗапомнитьПоля" id="131">
 					<Type>UsualButton</Type>
 					<CommandName>Form.Command.ЗапомнитьПоля</CommandName>
+					<Width>24</Width>
+					<HorizontalStretch>false</HorizontalStretch>
 					<ExtendedTooltip name="КнопкаЗапомнитьПоляРасширеннаяПодсказка" id="132">
 						<Title>
 							<v8:item>
@@ -159,6 +164,8 @@
 					<Type>UsualButton</Type>
 					<CommandName>Form.Command.Отклонить</CommandName>
 					<TextColor>web:Red</TextColor>
+					<Width>24</Width>
+					<HorizontalStretch>false</HorizontalStretch>
 					<ExtendedTooltip name="КнопкаОтклонитьРасширеннаяПодсказка" id="127"/>
 				</Button>
 			</ChildItems>

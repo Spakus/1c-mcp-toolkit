@@ -924,7 +924,7 @@
 											<TitleLocation>None</TitleLocation>
 											<ReadOnly>true</ReadOnly>
 											<MultiLine>true</MultiLine>
-											<Height>10</Height>
+											<Height>4</Height>
 											<HorizontalStretch>true</HorizontalStretch>
 											<VerticalStretch>true</VerticalStretch>
 											<AutoMaxWidth>false</AutoMaxWidth>
@@ -1205,7 +1205,7 @@
 							<Table name="РазрешенноеСравнениеТаблица" id="338">
 								<Representation>List</Representation>
 								<ReadOnly>true</ReadOnly>
-								<Height>5</Height>
+								<Height>3</Height>
 								<DataPath>РазрешенноеСравнение</DataPath>
 								<Title>
 									<v8:item>
@@ -1219,7 +1219,7 @@
 										<v8:content>Защищенные поля, для которых человек разрешил ПОДОБНО, сравнения больше/меньше и строковые функции. Значения в ответе остаются замаскированными. Действует на всю базу; включается в строгом режиме после подтверждения; отзыв действует со следующего вызова.</v8:content>
 									</v8:item>
 								</ToolTip>
-								<ToolTipRepresentation>ShowBottom</ToolTipRepresentation>
+								<ToolTipRepresentation>Button</ToolTipRepresentation>
 								<RowFilter xsi:nil="true"/>
 								<ContextMenu name="РазрешенноеСравнениеТаблицаКонтекстноеМеню" id="339"/>
 								<AutoCommandBar name="РазрешенноеСравнениеТаблицаКоманднаяПанель" id="340">
@@ -1573,7 +1573,7 @@
 								</UsualGroup>
 								<Pages name="СтраницыПросмотраТекста" id="116">
 									<PagesRepresentation>TabsOnTop</PagesRepresentation>
-									<Height>5</Height>
+									<Height>4</Height>
 									<HorizontalStretch>true</HorizontalStretch>
 									<ExtendedTooltip name="СтраницыПросмотраТекстаРасширеннаяПодсказка" id="117"/>
 									<ChildItems>
