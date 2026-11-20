@@ -21,11 +21,17 @@ struct Fail {
 
 // Keywords accepted as a path segment AFTER a dot (Т.Ссылка, Т.Представление, ...); never as the first segment.
 // ИЗМЕНЕНИЯ names the change-registration table of an exchange plan (Справочник.Файлы.Изменения); after a dot it
-// can never start the ДЛЯ ИЗМЕНЕНИЯ clause, which needs ДЛЯ first.
+// can never start the ДЛЯ ИЗМЕНЕНИЯ clause, which needs ДЛЯ first. ТИП and ТИПЗНАЧЕНИЯ are names proven live in 1C:
+// a call on the path stays refused, and the functions ТИП( / ТИПЗНАЧЕНИЯ( are unaffected
+// because they are first segments.
 bool IsAllowedKeywordSegment(Kw kw) {
     return kw == Kw::Refs || kw == Kw::Presentation || kw == Kw::RefPresentation || kw == Kw::Value ||
-           kw == Kw::Update;
+           kw == Kw::Update || kw == Kw::Type || kw == Kw::ValueType;
 }
+
+// Keywords a source may be named after КАК (ИЗ Т КАК Тип): proven live in 1C, plus В. After КАК they
+// cannot start anything else; a path starting with the word needs a dot right after it (Primary).
+bool IsSourceAliasKeyword(Kw kw) { return kw == Kw::In || kw == Kw::Type || kw == Kw::ValueType || kw == Kw::Update; }
 
 bool IsCountName(const std::string& key) { return key == "КОЛИЧЕСТВО" || key == "COUNT"; }
 
@@ -421,7 +427,7 @@ ExprP P::Primary() {
             return IdentifierExpr();
         case Tk::Keyword:
             // В.Поле: a source named В (КАК В, see SourceAlias). The operator В never starts an operand.
-            if (t.kw == Kw::In && Peek(1).kind == Tk::Dot) return IdentifierExpr();
+            if (IsSourceAliasKeyword(t.kw) && Peek(1).kind == Tk::Dot) return IdentifierExpr();
             return KeywordExpr();
         case Tk::LParen:
             return Paren();
@@ -606,7 +612,7 @@ std::string P::AliasName() {
 // Alias of a source after an explicit КАК: an identifier, or the keyword В (ИЗ Т КАК В): after КАК it cannot start
 // anything else, and the operator В never starts an operand, so В.Поле is a path (Primary).
 std::string P::SourceAlias() {
-    if (IsKw(Kw::In)) return Next().text;
+    if (Peek().kind == Tk::Keyword && IsSourceAliasKeyword(Peek().kw)) return Next().text;
     return AliasName();
 }
 

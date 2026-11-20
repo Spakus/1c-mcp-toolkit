@@ -35,13 +35,15 @@ bool IsAllowedKeywordSegment(const std::string& s) {
     Kw kw = Kw::None;
     if (!LexesAs(s, Tk::Keyword, &kw)) return false;
     return kw == Kw::Refs || kw == Kw::Presentation || kw == Kw::RefPresentation || kw == Kw::Value ||
-           kw == Kw::Update;
+           kw == Kw::Update || kw == Kw::Type || kw == Kw::ValueType;
 }
 
-// The keyword В as an alias after КАК (ИЗ Т КАК В, Т.Х КАК В) and as the first segment of a path to a source (В.Поле).
+// The keywords В, ТИП, ТИПЗНАЧЕНИЯ, ИЗМЕНЕНИЯ as an alias after КАК (ИЗ Т КАК В, Т.Х КАК В) and as the first segment of
+// a path to a source (В.Поле). Mirrors IsSourceAliasKeyword of the parser.
 bool IsInKeywordAlias(const std::string& s) {
     Kw kw = Kw::None;
-    return LexesAs(s, Tk::Keyword, &kw) && kw == Kw::In;
+    return LexesAs(s, Tk::Keyword, &kw) &&
+           (kw == Kw::In || kw == Kw::Type || kw == Kw::ValueType || kw == Kw::Update);
 }
 
 bool IsDigits(const std::string& s) {

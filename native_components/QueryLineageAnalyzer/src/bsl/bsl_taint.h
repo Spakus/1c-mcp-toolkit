@@ -61,7 +61,9 @@ bool ParseTokenTable(const std::string& policy_json, TokenTable& out);
 // text, for code the parser refused (no tree): the gate still shows the markers. If the tokenizer refuses part of the
 // text (an Unknown token, oversize) the whole normalised text is searched with word boundaries. The CheckCode entry point merges the
 // two for the CheckCode answer (MergeRisks); the host appends R_RELAUNCH / R_CLIENT_CONTEXT itself.
-std::vector<CodeReason> ScanRisksInSource(const std::string& utf8);
+// `tree_parsed`: the code parsed, so the tree pass (CollectExprNames) already decided the exact read chain
+// Константы.<Имя>.Получить(); the scan then does not apply the Write risk of the manager name to that chain.
+std::vector<CodeReason> ScanRisksInSource(const std::string& utf8, bool tree_parsed = false);
 // Risks of code the parser refused: ScanRisksInSource plus R_UNKNOWN_EFFECT (no tree, nothing proven); for C_EVAL and
 // C_DYNAMIC_NEW also R_PROTECTION and a raw scan of the string literals (alone and joined).
 std::vector<CodeReason> RefusedCodeRisks(const std::string& utf8, const std::string& parse_error_code,

@@ -919,3 +919,38 @@ TEST(CheckCode, ConstantsManagerStaysReadOnly) {
     // look-alike constant name (Latin A inside): not in the policy
     CHECK(Verdict(Check("Результат = Константы.Количество\x50отоков.Получить();", pol)) != std::string("safe"));
 }
+
+// R_WRITE is not raised on exactly Константы.<Имя>.Получить() (a read of a constant); the verdict is unchanged.
+TEST(CheckCode, ConstantGetChainHasNoWriteRisk) {
+    const std::string pol = PolicyWithConstants();
+    for (const char* code : {"Результат = Константы.КоличествоПотоков.Получить();",
+                             "Результат = Constants.КоличествоПотоков.Get();",
+                             "Результат = Константы.КоличествоПотоков.Получить() + 1;",
+                             "Результат = СтрДлина(Константы.ИмяОрганизации.Получить());",
+                             "Результат = СтрДлина(Константы.Тип.Получить());"}) {
+        CHECK(!HasRisk(Check(code, pol), "R_WRITE"));
+    }
+    CHECK_EQ(Verdict(Check("Результат = Константы.КоличествоПотоков.Получить();", pol)), std::string("safe"));
+    CHECK(HasReason(Check("Результат = СтрДлина(Константы.ИмяОрганизации.Получить());", pol), "C_FUNC_OVER_PROTECTED"));
+}
+
+// ATTACK: every other use of Константы keeps R_WRITE.
+TEST(CheckCode, ConstantsWriteRiskStaysOnEverythingElse) {
+    const std::string pol = PolicyWithConstants();
+    for (const char* code : {"Константы.КоличествоПотоков.Установить(1);\nРезультат = 1;",
+                             "Результат = Константы.КоличествоПотоков.СоздатьМенеджерЗначения();",
+                             "М = Константы.КоличествоПотоков;\nМ.Установить(1);\nРезультат = 1;",
+                             "Результат = Константы.КоличествоПотоков;",
+                             "Результат = Константы.КоличествоПотоков.Значение;",
+                             "Результат = Константы.КоличествоПотоков.Получить(1);",
+                             "Результат = Константы.СоздатьНабор(\"КоличествоПотоков\");",
+                             "Результат = Х.Константы.КоличествоПотоков.Получить();",
+                             "Результат = Константы[\"КоличествоПотоков\"].Получить();",
+                             "Результат = Константы.КоличествоПотоков.Получить() +;"}) {   // refused: token scan keeps the risk
+        CHECK(HasRisk(Check(code, pol), "R_WRITE"));
+    }
+    // Latin-letter spellings of the manager (Konstants; Latin K, n, s, t, a, n, t): not the exempt key and, as on HEAD,
+    // not a Write name either; the exemption does not change it and the verdict stays a refusal
+    CHECK(Verdict(Check("Результат = Konstants.КоличествоПотоков.Получить();", pol)) != std::string("safe"));
+    CHECK(Verdict(Check("Результат = \x4B\xD0\xBE\x6E\x73\x74\x61\x6E\x74\xD1\x8B.КоличествоПотоков.Получить();", pol)) != std::string("safe"));
+}

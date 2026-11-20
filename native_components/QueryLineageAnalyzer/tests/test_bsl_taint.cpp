@@ -961,3 +961,8 @@ TEST(BslTaint, EmptinessTestIsOneOpenBit) {
     CHECK(Safe(pre + "Результат = ЗначениеЗаполнено(Т[0].Имя);"));
     CHECK(Denied(pre + "Результат = ЗначениеЗаполнено(Сред(Т[0].Имя, 5));", "C_FUNC_OVER_PROTECTED"));
 }
+
+TEST(BslTaint, ConstantReadChainHasNoWriteRisk) {
+    CHECK(!HasRisk(CheckCodeForTest(kPolicyAB, "Результат = Константы.Х.Получить();"), "R_WRITE"));
+    CHECK(HasRisk(CheckCodeForTest(kPolicyAB, "Константы.Х.Установить(1); Результат = 1;"), "R_WRITE"));
+}

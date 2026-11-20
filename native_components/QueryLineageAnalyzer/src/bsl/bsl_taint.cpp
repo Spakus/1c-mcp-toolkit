@@ -292,6 +292,25 @@ bool IsPureReader(const std::string& key) {
     return keys.count(key) != 0;
 }
 
+// Константы.<Имя>.Получить(): the read of a constant. The Write risk of the manager name does not apply to exactly this
+// chain: a MethodCall Получить/Get with the receiver only, the receiver a Member whose object is the Var Константы/
+// Constants (AllowlistKey form, no homoglyph folding). Установить, СоздатьМенеджерЗначения, a bare Константы and any
+// other member keep the risk. Returns the Var node of the manager, or nullptr. Must stay in sync with
+// IsConstantReadAt (token scan merged with the tree pass by check_code.cpp).
+const Expr* ConstantReadManager(const Expr* e) {
+    static const std::string kGet = AllowlistKey("Получить"), kGetEn = AllowlistKey("Get");
+    static const std::string kRu = AllowlistKey("Константы"), kEn = AllowlistKey("Constants");
+    if (!e || e->kind != Expr::K::MethodCall || e->args.size() != 1) return nullptr;
+    const std::string method = AllowlistKey(e->text);
+    if (method != kGet && method != kGetEn) return nullptr;
+    const Expr* member = e->args[0].get();
+    if (!member || member->kind != Expr::K::Member || member->args.size() != 1) return nullptr;
+    const Expr* var = member->args[0].get();
+    if (!var || var->kind != Expr::K::Var) return nullptr;
+    const std::string key = AllowlistKey(var->text);
+    return (key == kRu || key == kEn) ? var : nullptr;
+}
+
 // Classes of one name (AllowlistKey already applied). An allowlisted method name (УстановитьПараметр) is exempt from
 // the Prefix rows: it is the allowlist's own, on its own receiver type; on any other receiver the unknown-effect
 // risk applies.
@@ -358,15 +377,17 @@ private:
 
 void CollectExprNames(const Expr* root, RiskCollector& risks) {
     std::vector<const Expr*> stack{root};
+    std::set<const Expr*> constant_managers;   // Var nodes of an exact Константы.X.Получить() chain
     while (!stack.empty()) {
         const Expr* e = stack.back();
         stack.pop_back();
         if (!e) continue;
+        if (const Expr* manager = ConstantReadManager(e)) constant_managers.insert(manager);
         const bool named = e->kind == Expr::K::Var || e->kind == Expr::K::Member || e->kind == Expr::K::Call ||
                            e->kind == Expr::K::MethodCall || e->kind == Expr::K::New;
         const std::string key = AllowlistKey(e->text);
         const bool pure_reader = e->kind == Expr::K::Call && e->args.empty() && IsPureReader(key);
-        if (named && !pure_reader) risks.Name(e->text, e->pos);
+        if (named && !pure_reader && constant_managers.count(e) == 0) risks.Name(e->text, e->pos);
         // Syntactic pass, independent of the type walk: a callee or "Новый" type that is on no allowlist table.
         if ((e->kind == Expr::K::Call && !Allowed().globals.count(key)) ||
             (e->kind == Expr::K::New && !Allowed().news.count(key)) ||
@@ -606,7 +627,28 @@ bool ParseTokenTable(const std::string& policy_json, TokenTable& out) {
     }
 }
 
-std::vector<CodeReason> ScanRisksInSource(const std::string& utf8) {
+namespace {
+
+// Tokens of an exact Константы.<Имя>.Получить(): the manager at `i` (not after a dot, not mixed-script, exact key), a
+// member (Identifier or Keyword, as in the tree), Получить/Get, an empty argument list. The token mirror of
+// ConstantReadManager: the two must stay in sync (the tree pass and this scan are merged by check_code.cpp).
+bool IsConstantReadAt(const std::vector<Token>& tokens, size_t i) {
+    static const std::string kGet = AllowlistKey("Получить"), kGetEn = AllowlistKey("Get");
+    static const std::string kRu = AllowlistKey("Константы"), kEn = AllowlistKey("Constants");
+    if (i + 6 >= tokens.size() || tokens[i].kind != Bt::Identifier || tokens[i].mixed_script) return false;
+    if (i > 0 && tokens[i - 1].kind == Bt::Dot) return false;
+    const std::string key = AllowlistKey(tokens[i].text);
+    if (key != kRu && key != kEn) return false;
+    if (tokens[i + 1].kind != Bt::Dot || (tokens[i + 2].kind != Bt::Identifier && tokens[i + 2].kind != Bt::Keyword) || tokens[i + 3].kind != Bt::Dot) return false;
+    const Token& method = tokens[i + 4];
+    if (method.kind != Bt::Identifier || method.mixed_script) return false;
+    const std::string m = AllowlistKey(method.text);
+    return (m == kGet || m == kGetEn) && tokens[i + 5].kind == Bt::LParen && tokens[i + 6].kind == Bt::RParen;
+}
+
+}  // namespace
+
+std::vector<CodeReason> ScanRisksInSource(const std::string& utf8, bool tree_parsed) {
     std::vector<CodeReason> raw;
     try {
         RiskCollector risks(raw);
@@ -623,7 +665,8 @@ std::vector<CodeReason> ScanRisksInSource(const std::string& utf8) {
             // A pure reader written as a plain call with no argument: `Имя ( )` and nothing else.
             const bool pure_reader = t.kind == Bt::Identifier && !t.mixed_script && !after_dot && !after_new && call &&
                                      i + 2 < tokens.size() && tokens[i + 2].kind == Bt::RParen && IsPureReader(key);
-            if ((t.kind == Bt::Identifier || t.kind == Bt::Keyword) && !pure_reader) {
+            const bool constant_read = tree_parsed && IsConstantReadAt(tokens, i);
+            if ((t.kind == Bt::Identifier || t.kind == Bt::Keyword) && !pure_reader && !constant_read) {
                 risks.Name(t.text, pos, t.mixed_script);
             }
             // Syntactic mirror of the tree pass: a callee or "Новый" type that is on no allowlist table.

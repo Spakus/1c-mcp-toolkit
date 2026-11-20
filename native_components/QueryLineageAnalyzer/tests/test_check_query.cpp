@@ -654,6 +654,42 @@ TEST(CheckQuery, ExchangePlanChangeTable) {
     CHECK(canonical.find("Справочник.А.Изменения") != std::string::npos);
 }
 
+// A keyword proven live as a name (КАК Тип, Т.Тип, ИЗ ... КАК Тип) is an ordinary alias / path. Strictness is
+// unchanged: a field of a table is still resolved against the policy.
+TEST(CheckQuery, KeywordAsAliasAndSegment) {
+    const auto verdict = [](const std::string& q) { return Check(q, kPolicyABJson)["verdict"].get<std::string>(); };
+    CHECK_EQ(verdict("ВЫБРАТЬ А.Ссылка КАК Тип ИЗ Справочник.А КАК А"), std::string("safe"));
+    CHECK_EQ(verdict("ВЫБРАТЬ А.Ссылка КАК ТипЗначения ИЗ Справочник.А КАК А"), std::string("safe"));
+    CHECK_EQ(verdict("ВЫБРАТЬ Т.Тип КАК Х ИЗ (ВЫБРАТЬ А.Ссылка КАК Тип ИЗ Справочник.А КАК А) КАК Т"), std::string("safe"));
+    const std::string canonical =
+        Check("ВЫБРАТЬ А.Ссылка КАК Тип ИЗ Справочник.А КАК А", kPolicyABJson)["canonical"].get<std::string>();
+    CHECK(canonical.find("КАК Тип") != std::string::npos);
+    // ATTACK: a keyword-named path is resolved against the policy like any field
+    CHECK_EQ(verdict("ВЫБРАТЬ А.Тип КАК Х ИЗ Справочник.А КАК А"), std::string("confirm"));
+    // ATTACK: a call on a path, and keywords 1C does not take, stay refused
+    CHECK(HasCode(Check("ВЫБРАТЬ А.Тип(1) КАК Х ИЗ Справочник.А КАК А", kPolicyABJson), "Q_PARSE_UNEXPECTED"));
+    CHECK_EQ(verdict("ВЫБРАТЬ А.Ссылка КАК Из ИЗ Справочник.А КАК А"), std::string("confirm"));
+    CHECK_EQ(verdict("ВЫБРАТЬ А.Ссылка КАК И ИЗ Справочник.А КАК А"), std::string("confirm"));
+    CHECK_EQ(verdict("ВЫБРАТЬ А.Ссылка КАК Есть ИЗ Справочник.А КАК А"), std::string("confirm"));
+    CHECK_EQ(verdict("ВЫБРАТЬ А.Ссылка КАК С ИЗ Справочник.А КАК Есть"), std::string("confirm"));
+}
+
+TEST(CheckQuery, KeywordSourceAlias) {
+    const auto verdict = [](const std::string& q) { return Check(q, kPolicyABJson)["verdict"].get<std::string>(); };
+    CHECK_EQ(verdict("ВЫБРАТЬ Тип.Ссылка КАК С ИЗ Справочник.А КАК Тип"), std::string("safe"));
+    CHECK_EQ(verdict("ВЫБРАТЬ ТипЗначения.Ссылка КАК С ИЗ Справочник.А КАК ТипЗначения"), std::string("safe"));
+    CHECK_EQ(verdict("ВЫБРАТЬ Изменения.Ссылка КАК С ИЗ Справочник.А КАК Изменения"), std::string("safe"));
+    CHECK_EQ(verdict("ВЫБРАТЬ Тип.Ссылка КАК С ИЗ Справочник.А КАК Тип ГДЕ Тип.Ссылка = &П"), std::string("safe"));
+    // ATTACK: unlisted keywords stay refused as source alias; call on the alias path stays refused
+    CHECK_EQ(verdict("ВЫБРАТЬ А.Ссылка КАК С ИЗ Справочник.А КАК Из"), std::string("confirm"));
+    CHECK_EQ(verdict("ВЫБРАТЬ А.Ссылка КАК С ИЗ Справочник.А КАК Выбрать"), std::string("confirm"));
+    CHECK(HasCode(Check("ВЫБРАТЬ Тип.Тип(1) КАК С ИЗ Справочник.А КАК Тип", kPolicyABJson), "Q_PARSE_UNEXPECTED"));
+    // ATTACK: a field reached through an alias named Тип is still resolved against the policy
+    CHECK_EQ(verdict("ВЫБРАТЬ Тип.Нет КАК С ИЗ Справочник.А КАК Тип"), std::string("confirm"));
+    // bare alias reference (УПОРЯДОЧИТЬ ПО Тип) is out of scope and stays refused
+    CHECK_EQ(verdict("ВЫБРАТЬ Тип.Ссылка КАК С ИЗ Справочник.А КАК Тип УПОРЯДОЧИТЬ ПО Тип"), std::string("confirm"));
+}
+
 // Names mixing Latin and Cyrillic that the policy lists are real configuration names; any other mix is refused.
 TEST(CheckQuery, MixedScriptNamesOfThePolicyPass) {
     const std::string policy = R"({"version":1,"tables":{"Справочник.ТомаS3":{"presentation":"protected",
@@ -706,4 +742,30 @@ TEST(CheckQuery, TrailingDropKeepsTheSelectResult) {
                         kPolicyABJson),
                   "Q_BATCH_RESULT"));
     CHECK(HasCode(Check("ВЫБРАТЬ 1 КАК Х;\nВЫБРАТЬ 2 КАК Y;\nУНИЧТОЖИТЬ ВТ", kPolicyABJson), "Q_BATCH_RESULT"));
+}
+
+// Pins the review of the keyword-name changes: a keyword segment (Тип) in a source / type name stays in the type-name
+// position only and brings no data; the table is asked from the host, never assumed. An alias reference named Тип
+// with no such alias in the query is an unknown name.
+TEST(CheckQuery, KeywordSegmentInSourceAndTypeName) {
+    // (observe) a table named Справочник.Тип is unknown to the policy: incomplete, the host is asked for it
+    const nlohmann::json source = Check("ВЫБРАТЬ А.Ссылка КАК С ИЗ Справочник.Тип КАК А", kPolicyABJson);
+    CHECK_EQ(source["verdict"].get<std::string>(), std::string("incomplete"));
+    CHECK_EQ(source["missing_tables"][0].get<std::string>(), std::string("Справочник.Тип"));
+    // (observe) a type literal in ТИП() / ВЫРАЗИТЬ(... КАК ...) names a type, reads no data: open, no reasons
+    for (const char* q : {"ВЫБРАТЬ ТИП(Справочник.Тип) КАК Х ИЗ Справочник.А КАК А",
+                          "ВЫБРАТЬ ВЫРАЗИТЬ(А.Ссылка КАК Справочник.Тип) КАК Х ИЗ Справочник.А КАК А"}) {
+        const nlohmann::json j = Check(q, kPolicyABJson);
+        CHECK_EQ(j["verdict"].get<std::string>(), std::string("safe"));
+        CHECK_EQ(j["columns"][0]["origin"].get<std::string>(), std::string("open"));
+    }
+    // ATTACK: the cast keeps the class of the cast value; the type name does not open a protected field
+    const nlohmann::json cast = Check("ВЫБРАТЬ ВЫРАЗИТЬ(А.Имя КАК Справочник.Тип) КАК Х ИЗ Справочник.А КАК А", kPolicyABJson);
+    CHECK(cast["columns"][0]["origin"].get<std::string>() != std::string("open"));
+    // ATTACK: Тип.Поле with no alias Тип in the query is an unknown alias, never safe
+    for (const char* q : {"ВЫБРАТЬ Тип.Ссылка КАК С ИЗ Справочник.А КАК А", "ВЫБРАТЬ Тип.Имя КАК С ИЗ Справочник.А КАК А"}) {
+        const nlohmann::json j = Check(q, kPolicyABJson);
+        CHECK(j["verdict"].get<std::string>() != std::string("safe"));
+        CHECK(HasCode(j, "Q_RESOLVE_UNKNOWN_NAME"));
+    }
 }

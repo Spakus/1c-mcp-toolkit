@@ -203,7 +203,7 @@ TEST(StrictParser, KeywordPathSegmentsRejected) {
     CHECK_EQ(ExprDump("Т.ПредставлениеСсылки"), std::string("(f Т ПредставлениеСсылки)"));
     CHECK_EQ(ExprDump("Х.Значение"), std::string("(f Х Значение)"));
     CHECK(Code("Ссылка.Х") != "OK");   // allowlisted words are never the first segment
-    for (const char* bad : {"Т.И", "Т.НЕ", "Т.ВЫБРАТЬ", "Т.ТИП", "ТИП(Х.И)", "Т.А.В", "ВЫРАЗИТЬ(Х КАК Т.Тип)", "Х ССЫЛКА Справочник.Все",
+    for (const char* bad : {"Т.И", "Т.НЕ", "Т.ВЫБРАТЬ", "Т.ЕСТЬ", "ТИП(Х.И)", "Т.А.В", "ВЫРАЗИТЬ(Х КАК Т.Есть)", "Х ССЫЛКА Справочник.Все",
                             "ЗНАЧЕНИЕ(Перечисление.Виды.Для)"})
         CHECK_EQ(Code(bad), std::string("Q_PARSE_KEYWORD_SEGMENT"));
 }
@@ -218,7 +218,7 @@ TEST(StrictParser, KeywordColumnAliasOnlyAfterKak) {
     CHECK(items[2].alias == "ПредставлениеСсылки");
     CHECK(items[3].alias == "Значение");
     // Only the four path keywords, only as the alias of a select item, only after КАК.
-    for (const char* bad : {"ВЫБРАТЬ Т.А КАК Тип ИЗ Справочник.А КАК Т", "ВЫБРАТЬ Т.А КАК ВЫБРАТЬ ИЗ Справочник.А КАК Т",
+    for (const char* bad : {"ВЫБРАТЬ Т.А КАК Есть ИЗ Справочник.А КАК Т", "ВЫБРАТЬ Т.А КАК ВЫБРАТЬ ИЗ Справочник.А КАК Т",
                             "ВЫБРАТЬ Т.А Ссылка ИЗ Справочник.А КАК Т", "ВЫБРАТЬ Т.А КАК А ИЗ Справочник.А КАК Ссылка",
                             "ВЫБРАТЬ Т.А КАК А ПОМЕСТИТЬ Значение ИЗ Справочник.А КАК Т",
                             "ВЫБРАТЬ Т.А КАК А ИЗ Справочник.А КАК Т ИТОГИ ПО Т.А КАК Ссылка",
@@ -787,4 +787,25 @@ TEST(StrictParser, ErrorDetailNeverEchoesInput) {
         CHECK(r.error.detail.find(secret) == std::string::npos);
         CHECK(r.error.detail.find("СекретноеИмя") == std::string::npos);
     }
+}
+
+// Keywords proven live in 1C are names after a dot; the first segment and a call on a path stay refused.
+TEST(StrictParser, KeywordNamesAfterDot) {
+    CHECK_EQ(Code("Т.Тип"), std::string("OK"));
+    CHECK_EQ(Code("Т.ТИП"), std::string("OK"));
+    CHECK_EQ(Code("Т.Type"), std::string("OK"));
+    CHECK_EQ(Code("Т.ТипЗначения"), std::string("OK"));
+    CHECK_EQ(Code("Т.ValueType"), std::string("OK"));
+    CHECK_EQ(Code("Т.Изменения"), std::string("OK"));
+    CHECK_EQ(Code("Т.Тип = 1"), std::string("OK"));
+    CHECK_EQ(Code("ТИП(Справочник.А)"), std::string("OK"));
+    CHECK_EQ(Code("ТИПЗНАЧЕНИЯ(Т.Х)"), std::string("OK"));
+    CHECK(Code("Тип") != std::string("OK"));
+    CHECK_EQ(Code("Т.Тип(1)"), std::string("Q_PARSE_UNEXPECTED"));
+    CHECK_EQ(Code("Т.ТипЗначения(Х)"), std::string("Q_PARSE_UNEXPECTED"));
+    CHECK_EQ(Code("Т.Из"), std::string("Q_PARSE_KEYWORD_SEGMENT"));
+    CHECK_EQ(Code("Т.И"), std::string("Q_PARSE_KEYWORD_SEGMENT"));
+    CHECK_EQ(Code("Т.Выбрать"), std::string("Q_PARSE_KEYWORD_SEGMENT"));
+    CHECK_EQ(Code("Т.Ложь"), std::string("Q_PARSE_KEYWORD_SEGMENT"));
+    CHECK_EQ(Code("Т.Есть"), std::string("Q_PARSE_KEYWORD_SEGMENT"));   // 1C rejects ЕСТЬ in every position
 }

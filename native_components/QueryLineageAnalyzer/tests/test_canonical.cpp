@@ -179,7 +179,7 @@ TEST(Canonical, KeywordColumnAliasIsPrintedAsWritten) {
     // A hand-built alias that is any other keyword is refused.
     auto b = ParseBatchStrict("ВЫБРАТЬ 1 КАК Х");
     CHECK(b.ok);
-    b.batch.statements[0].select->items[0].alias = "Тип";
+    b.batch.statements[0].select->items[0].alias = "Есть";
     CHECK_EQ(PrintCanonicalChecked(b.batch).error.code, std::string("Q_PRINT_IDENT"));
 }
 
@@ -482,4 +482,16 @@ TEST(Canonical, GeneratedExpressionsRoundTrip) {
         ++printed;
     }
     CHECK(printed >= 100);   // the generator must not degenerate into skipped rounds
+}
+
+// A keyword name that the parser accepts must print back, or the gate fails closed with Q_PRINT_IDENT.
+TEST(Canonical, KeywordNamesRoundTrip) {
+    RoundTrip("ВЫБРАТЬ А.Ссылка КАК Тип ИЗ Справочник.А КАК А");
+    RoundTrip("ВЫБРАТЬ А.Ссылка КАК ТипЗначения ИЗ Справочник.А КАК А");
+    RoundTrip("ВЫБРАТЬ Т.Тип КАК Х ИЗ (ВЫБРАТЬ А.Ссылка КАК Тип ИЗ Справочник.А КАК А) КАК Т");
+    RoundTrip("ВЫБРАТЬ Т.Тип КАК Тип ИЗ (ВЫБРАТЬ А.Ссылка КАК Тип ИЗ Справочник.А КАК А) КАК Т ГДЕ Т.Тип = 1");
+    RoundTrip("ВЫБРАТЬ А.Ссылка КАК Х ИЗ Справочник.А КАК А ГДЕ А.Тип = 1");
+    RoundTrip("ВЫБРАТЬ Тип.Ссылка КАК С ИЗ Справочник.А КАК Тип ГДЕ Тип.Ссылка = &П");
+    RoundTrip("ВЫБРАТЬ ТипЗначения.Ссылка КАК С ИЗ Справочник.А КАК ТипЗначения");
+    RoundTrip("ВЫБРАТЬ Изменения.Ссылка КАК С ИЗ Справочник.А КАК Изменения");
 }

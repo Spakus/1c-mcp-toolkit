@@ -235,7 +235,7 @@ Outcome Check(const std::string& code, const std::string& policy_json) {
     o.reasons = ExpandOracleReasons(a);
     for (const CodeReason& r : a.result_reasons) o.reasons.push_back(r);
     o.risks = a.risks;
-    MergeRisks(o.risks, ScanRisksInSource(code));
+    MergeRisks(o.risks, ScanRisksInSource(code, true));
     o.labels = a.result_labels;
     o.missing_tables = a.missing_tables;
     o.module_call_sites = a.module_call_sites;
