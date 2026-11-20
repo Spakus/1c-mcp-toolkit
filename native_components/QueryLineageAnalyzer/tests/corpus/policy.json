@@ -103,6 +103,12 @@
       "fields": {
         "Значение": {"class": "open"}
       }
+    },
+    "Константа.ИмяОрганизации": {
+      "presentation": "protected",
+      "fields": {
+        "Значение": {"class": "protected"}
+      }
     }
   },
   "virtual_tables": {

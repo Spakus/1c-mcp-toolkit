@@ -147,6 +147,15 @@ std::set<std::string> LocalMixedNames(const std::vector<Token>& tokens) {
     return out;
 }
 
+// Mixed-script parameter names of every string literal read as a query text (see strict::LocalMixedParams).
+std::set<std::string> LocalMixedParamNames(const std::vector<Token>& tokens) {
+    std::vector<std::string> texts;
+    for (const Token& t : tokens) {
+        if (t.kind == Bt::String) texts.push_back(t.value);
+    }
+    return strict::LocalMixedParams(texts);
+}
+
 bool HasRefusedMixedName(const std::vector<Token>& tokens) {
     for (const Token& t : tokens) {
         if (t.kind == Bt::Identifier && t.mixed_script && IsRefusedMixedScript(t.text)) return true;
@@ -198,7 +207,8 @@ Outcome Check(const std::string& code, const std::string& policy_json) {
     const std::vector<Token> source_tokens = Tokenize(code);
     const std::set<std::string> local = LocalMixedNames(source_tokens);
     mixed.insert(local.begin(), local.end());
-    const KnownMixedNamesScope scope(&mixed);   // also covers the query texts checked inside AnalyzeCode
+    const std::set<std::string> local_params = LocalMixedParamNames(source_tokens);
+    const KnownMixedNamesScope scope(&mixed, &local_params);   // also covers the query texts checked inside AnalyzeCode
 
     const ParseResult parsed = ParseBsl(code);   // the Body lives until the end of this function
     if (!parsed.ok) {

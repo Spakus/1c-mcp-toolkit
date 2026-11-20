@@ -299,7 +299,8 @@ std::string Check(const std::string& query_utf8, const std::string& policy_json)
     std::set<std::string> mixed = policy.policy.MixedScriptNames();
     const std::set<std::string> local = LocalMixedAliases(query_utf8);   // aliases the text defines itself
     mixed.insert(local.begin(), local.end());
-    const KnownMixedNamesScope scope(&mixed);
+    const std::set<std::string> local_params = LocalMixedParams(query_utf8);   // parameters the text names itself
+    const KnownMixedNamesScope scope(&mixed, &local_params);
     return ToJson(Analyze(query_utf8, policy.policy, &tokens));
 }
 

@@ -377,6 +377,52 @@ TEST(CheckCode, MixedScriptParamNameIsSafe) {
     CHECK_EQ(Label(j, "$[*].Х"), std::string("client"));
 }
 
+// A query text naming a mixed-script parameter (a Latin A inside a Cyrillic word) passes; a field or a table with the
+// same mixing, or a look-alike pair of parameters, stays refused.
+TEST(CheckCode, MixedScriptQueryParameterInCode) {
+    const std::string q = "З = Новый Запрос(\"ВЫБРАТЬ А.Имя КАК Имя ИЗ Справочник.А КАК А ГДЕ А.Код = &ВидA\");\n";
+    const Json ok = Check(q + "З.УстановитьПараметр(\"ВидA\", \"1\");\nРезультат = З.Выполнить().Выгрузить();");
+    CHECK(!HasReason(ok, "Q_PARSE_MIXED_SCRIPT"));
+    CHECK(!HasReason(ok, "C_BAD_PARAM_NAME"));
+    CHECK(!HasReason(ok, "C_PARSE"));
+    CHECK(ok["canonical"].get<std::string>().find("&ВидA") != std::string::npos);
+    // field / table of the text stay refused even next to a mixed parameter
+    CHECK(HasReason(Check("З = Новый Запрос(\"ВЫБРАТЬ А.ВидA ИЗ Справочник.А КАК А ГДЕ А.Код = &ВидA\");\nРезультат = 1;"),
+                    "Q_PARSE_MIXED_SCRIPT"));
+    CHECK(HasReason(Check("З = Новый Запрос(\"ВЫБРАТЬ А.Код ИЗ Справочник.ВидA КАК А ГДЕ А.Код = &ВидA\");\nРезультат = 1;"),
+                    "Q_PARSE_MIXED_SCRIPT"));
+    CHECK(HasReason(Check("З = Новый Запрос(\"ВЫБРАТЬ &ВидA КАК Х, &ВидА КАК У\");\nРезультат = 1;"), "Q_PARSE_MIXED_SCRIPT"));
+    // a parameter used inside a nested query
+    const Json nested = Check(
+        "З = Новый Запрос(\"ВЫБРАТЬ Н.Код КАК Х ИЗ (ВЫБРАТЬ А.Код КАК Код ИЗ Справочник.А КАК А ГДЕ А.Код = &ВидA) КАК Н\");\n"
+        "З.УстановитьПараметр(\"ВидA\", \"1\");\nРезультат = З.Выполнить().Выгрузить();");
+    CHECK(!HasReason(nested, "Q_PARSE_MIXED_SCRIPT"));
+    // the same name used as a code identifier is still a refused mixed-script identifier (a parameter name is no variable)
+    const Json ident = Check("З = Новый Запрос(\"ВЫБРАТЬ &ВидA КАК Х\");\nРезультат = ВидA;");
+    CHECK(Verdict(ident) != std::string("safe"));
+    // a binding under the look-alike spelling does not bind the text's parameter
+    const Json other = Check(q + "З.УстановитьПараметр(\"ВидА\", \"1\");\nРезультат = З.Выполнить().Выгрузить();");
+    CHECK(Verdict(other) != std::string("safe"));
+}
+
+// A confusable pair of parameter names (Latin A / Cyrillic А) is refused wherever the two spellings sit: in one text,
+// or split across two texts of the same code. A sibling text never makes the Latin-mixed spelling pass.
+TEST(CheckCode, MixedScriptParameterLookalikeAcrossTexts) {
+    const Json same = Check(
+        "А = Новый Запрос(\"ВЫБРАТЬ &ВидA КАК Первый\");\nА.УстановитьПараметр(\"ВидA\", \"1\");\n"
+        "Б = Новый Запрос(\"ВЫБРАТЬ &ВидA КАК Первый, &ВидА КАК Второй\");\n"
+        "Б.УстановитьПараметр(\"ВидA\", \"1\");\nБ.УстановитьПараметр(\"ВидА\", \"2\");\n"
+        "Результат = Б.Выполнить().Выгрузить();");
+    CHECK(HasReason(same, "Q_PARSE_MIXED_SCRIPT"));
+    CHECK(Verdict(same) != std::string("safe"));
+    const Json split = Check(
+        "А = Новый Запрос(\"ВЫБРАТЬ &ВидA КАК Первый\");\nА.УстановитьПараметр(\"ВидA\", \"1\");\n"
+        "Б = Новый Запрос(\"ВЫБРАТЬ &ВидА КАК Второй\");\nБ.УстановитьПараметр(\"ВидА\", \"2\");\n"
+        "Результат = А.Выполнить().Выгрузить();");
+    CHECK(HasReason(split, "Q_PARSE_MIXED_SCRIPT"));
+    CHECK(Verdict(split) != std::string("safe"));
+}
+
 namespace {
 
 // A query reading the protected Имя, its first row in В, and a second query З2 (by default its only column is the
@@ -632,4 +678,244 @@ TEST(CheckCode, RefusalRiskSitsAtTheRefusalPosition) {
     }
     CHECK_EQ(at_limit, 1);
     CHECK_EQ(at_origin, 0);
+}
+
+// A: СтрокаСоединенияИнформационнойБазы() / InfoBaseConnectionString() read the identity of the base, not data: an Open
+// string, no reason, no risk (kPureReaders mechanism). The exact no-argument call only.
+TEST(CheckCode, ConnectionStringReaderIsSafeWithoutRisks) {
+    const char* const kCodes[] = {
+        "Результат = СтрокаСоединенияИнформационнойБазы();", "Результат = InfoBaseConnectionString();",
+        "Результат = строкасоединенияинформационнойбазы();", "Результат = СтрокаСоединенияИнформационнойБазы( );",
+        "Результат = СтрНайти(СтрокаСоединенияИнформационнойБазы(), \"buh\") > 0;",
+        "Результат = Новый Структура(\"К\", СтрНайти(InfoBaseConnectionString(), \"File\") > 0);"};
+    for (const char* code : kCodes) {
+        const Json j = Check(code);
+        CHECK_EQ(Verdict(j), std::string("safe"));
+        CHECK_EQ(CodeSet(j, "reasons"), std::string());
+        CHECK_EQ(CodeSet(j, "risks"), std::string());
+    }
+    CHECK(Label(Check("Результат = СтрокаСоединенияИнформационнойБазы();"), "$") != std::string("protected"));
+    // The neighbour's risk is still reported.
+    const Json mixed = Check("Результат = СтрокаСоединенияИнформационнойБазы();\nПарольПользователя = 1;");
+    CHECK(HasRisk(mixed, "R_CREDENTIALS"));
+}
+
+// A: every other name that contains СтрокаСоединения / ConnectionString keeps its verdict and risks.
+TEST(CheckCode, ConnectionStringLookalikesKeepTheirVerdicts) {
+    struct Pin {
+        const char* code;
+        const char* verdict;
+        const char* reasons;
+        const char* risks;
+    };
+    const Pin kPins[] = {
+        {"Результат = СтрокаСоединенияИнформационнойБазыХ();", "confirm", "C_UNKNOWN_IDENT,C_UNLABELED_RESULT",
+         "R_CREDENTIALS,R_UNKNOWN_EFFECT"},
+        {"Результат = ХСтрокаСоединенияИнформационнойБазы();", "confirm", "C_UNKNOWN_IDENT,C_UNLABELED_RESULT",
+         "R_CREDENTIALS,R_UNKNOWN_EFFECT"},
+        {"Результат = СтрокаСоединенияВнешнегоИсточника();", "confirm", "C_UNKNOWN_IDENT,C_UNLABELED_RESULT",
+         "R_CREDENTIALS,R_PROTECTION,R_UNKNOWN_EFFECT"},
+        {"Результат = Новый СтрокаСоединенияИнформационнойБазы();", "confirm", "C_UNKNOWN_TYPE,C_UNLABELED_RESULT",
+         "R_CREDENTIALS,R_UNKNOWN_EFFECT"},
+        {"Результат = СтрокаСоединенияИнформационнойБазы;", "confirm", "C_UNKNOWN_IDENT,C_UNLABELED_RESULT",
+         "R_CREDENTIALS"},
+        {"СтрокаСоединенияИнформационнойБазы = 1;\nРезультат = СтрокаСоединенияИнформационнойБазы;", "safe", "",
+         "R_CREDENTIALS"},   // a variable
+        {"Результат = ConnectionString();", "confirm", "C_UNKNOWN_IDENT,C_UNLABELED_RESULT",
+         "R_CREDENTIALS,R_UNKNOWN_EFFECT"},
+    };
+    for (const Pin& p : kPins) {
+        const Json j = Check(p.code);
+        CHECK_EQ(Verdict(j), std::string(p.verdict));
+        CHECK_EQ(CodeSet(j, "reasons"), std::string(p.reasons));
+        CHECK_EQ(CodeSet(j, "risks"), std::string(p.risks));
+    }
+    // A call with an argument fails the arity row: still confirm with the credentials risk.
+    const Json arg = Check("Результат = СтрокаСоединенияИнформационнойБазы(\"x\");");
+    CHECK_EQ(Verdict(arg), std::string("confirm"));
+    CHECK(HasReason(arg, "C_BAD_ARGS"));
+    CHECK(HasRisk(arg, "R_CREDENTIALS"));
+    // A method of another object is not the reader.
+    const Json member = Check("Результат = Х.СтрокаСоединенияИнформационнойБазы();");
+    CHECK(Verdict(member) != std::string("safe"));
+    CHECK(HasRisk(member, "R_CREDENTIALS"));
+    // A homoglyph spelling (Latin "a" instead of Cyrillic in "Строка") is not the reader.
+    const Json lookalike = Check("Результат = Строк\x61" "СоединенияИнформационнойБазы();");
+    CHECK(Verdict(lookalike) != std::string("safe"));
+    CHECK(HasRisk(lookalike, "R_CREDENTIALS"));
+}
+
+// A: the exemption needs the exact call shape also in the token scan of refused code.
+TEST(CheckCode, ConnectionStringExemptionNeedsTheExactCallShape) {
+    CHECK(HasRisk(Check("Результат = СтрокаСоединенияИнформационнойБазы(\"x\") +;"), "R_CREDENTIALS"));
+    CHECK(HasRisk(Check("Результат = Х.СтрокаСоединенияИнформационнойБазы() +;"), "R_CREDENTIALS"));
+    CHECK(!HasRisk(Check("Результат = СтрокаСоединенияИнформационнойБазы() +;"), "R_CREDENTIALS"));
+}
+
+// D: the client may read the platform enumeration Символы / Chars (the printer no longer owns the name).
+TEST(CheckCode, ClientMayReadChars) {
+    const char* const kCodes[] = {
+        "Результат = Символы.ПС;", "Результат = Chars.LF;", "Результат = Символы.Таб;", "Результат = символы.вк;",
+        "Результат = СтрДлина(\"а\" + Символы.ПС + \"б\");", "Результат = СтрЗаменить(\"а,б\", \",\", Символы.ПС);",
+        "Результат = Символы.ВТаб + Символы.НПП + Символы.ПФ;"};
+    for (const char* code : kCodes) {
+        const Json j = Check(code);
+        CHECK_EQ(Verdict(j), std::string("safe"));
+        CHECK_EQ(CodeSet(j, "reasons"), std::string());
+        CHECK_EQ(CodeSet(j, "risks"), std::string());
+    }
+    // Only the six members of the enumeration; anything else on it, a call on it or a write to it is not allowed.
+    CHECK(HasReason(Check("Результат = Символы.Пробел;"), "C_UNKNOWN_MEMBER"));
+    CHECK(Verdict(Check("Символы.ПС = 1;\nРезультат = 1;")) != std::string("safe"));
+    CHECK(Verdict(Check("Результат = Символы();")) != std::string("safe"));
+    CHECK(Verdict(Check("Результат = Новый Символы;")) != std::string("safe"));
+}
+
+// D: the canonical text no longer uses Символы: a client variable of that name cannot change a printed line break.
+TEST(CheckCode, PrintedLineBreaksDoNotUseClientNames) {
+    const std::string q = "З = Новый Запрос(\"ВЫБРАТЬ А.Имя КАК Имя\n|ИЗ Справочник.А КАК А\");\n"
+                          "Результат = З.Выполнить().Выгрузить();";
+    const char* const kPrefixes[] = {"", "Символы = Новый Структура(\"ПС\", \"x\");\n", "Chars = 1;\n", "Символ = 5;\n",
+                                     "Символ = Новый Структура(\"К\", 1);\nСимволы = Символ;\n"};
+    for (const char* prefix : kPrefixes) {
+        const Json j = Check(std::string(prefix) + q);
+        CHECK_EQ(Verdict(j), std::string("safe"));
+        const std::string canonical = j["canonical"].get<std::string>();
+        CHECK(canonical.find("Символ(10)") != std::string::npos);
+        CHECK(canonical.find("Символы.ПС +") == std::string::npos);
+    }
+    // A write to a member of the enumeration is not allowed.
+    CHECK(Verdict(Check("Символы.ПС = 1;\n" + q)) != std::string("safe"));
+}
+
+// D: a query text built with Символы.ПС is a member read, not a literal: the text is dynamic.
+TEST(CheckCode, CharsInQueryTextMakesItDynamic) {
+    const Json j = Check("З = Новый Запрос(\"ВЫБРАТЬ 1\" + Символы.ПС + \"КАК А\");\nРезультат = 1;");
+    CHECK_EQ(Verdict(j), std::string("confirm"));
+    CHECK(HasReason(j, "C_DYNAMIC_QUERY"));
+}
+
+// D: Base64 re-encodes a value; it is a known platform function that never unmasks.
+TEST(CheckCode, Base64OverOpenAndClientDataIsSafe) {
+    const char* const kCodes[] = {
+        "Результат = Base64Строка(\"abc\");", "Результат = GetBase64StringFromBinaryData(Base64Value(\"YWJj\"));",
+        "Результат = СтрДлина(ПолучитьBase64СтрокуИзДвоичныхДанных(ПолучитьДвоичныеДанныеИзBase64Строки(\"YWJj\")));",
+        "Результат = Base64Строка(Base64Значение(\"YWJj\"));", "Результат = base64строка(\"x\");",
+        "Результат = GetBinaryDataFromBase64String(\"YWJj\");"};
+    for (const char* code : kCodes) {
+        const Json j = Check(code);
+        CHECK_EQ(Verdict(j), std::string("safe"));
+        CHECK_EQ(CodeSet(j, "reasons"), std::string());
+        CHECK_EQ(CodeSet(j, "risks"), std::string());
+    }
+}
+
+// ATTACK: a protected value through Base64 (once, twice, round trip, in a structure, as a loop item, via a variable)
+// stays protected: never safe, C_FUNC_OVER_PROTECTED, the label is not open / client.
+TEST(CheckCode, Base64OfProtectedStaysProtected) {
+    const std::string q = "З = Новый Запрос(\"ВЫБРАТЬ А.Имя КАК Имя, А.Ссылка КАК С ИЗ Справочник.А КАК А\");\n"
+                          "Т = З.Выполнить().Выгрузить();\n";
+    const char* const kTails[] = {
+        "Результат = Base64Строка(Т[0].Имя);", "Результат = Base64Строка(Base64Строка(Т[0].Имя));",
+        "Результат = Base64Строка(ПолучитьДвоичныеДанныеИзBase64Строки(Base64Строка(Т[0].Имя)));",
+        "Результат = Base64Строка(Base64Значение(Base64Строка(Т[0].Имя)));",   // round trip
+        "Результат = ПолучитьBase64СтрокуИзДвоичныхДанных(Base64Значение(Т[0].Имя));",
+        "Результат = Новый Структура(\"К\", Base64Строка(Т[0].Имя));",
+        "Результат = Новый Массив; Для Каждого С Из Т Цикл Результат.Добавить(Base64Строка(С.Имя)); КонецЦикла;",
+        "Х = Т[0].Имя;\nУ = Base64Строка(Х);\nРезультат = Base64Значение(У);",   // through variables
+        "Результат = Base64Строка(Т[0].С);"};   // a reference: read as its (protected) presentation
+    for (const char* tail : kTails) {
+        const Json j = Check(q + tail);
+        CHECK(Verdict(j) != std::string("safe"));
+        CHECK(HasReason(j, "C_FUNC_OVER_PROTECTED"));
+        const std::string l = Label(j, "$");
+        CHECK(l != std::string("open") && l != std::string("client"));
+    }
+    // A client literal next to a protected value does not launder it.
+    CHECK(Verdict(Check(q + "Результат = Base64Строка(Т[0].Имя + \"x\");")) != std::string("safe"));
+    // Unknown labels stay unknown.
+    CHECK(Verdict(Check("Результат = Base64Строка(Х);")) != std::string("safe"));
+}
+
+// ATTACK: look-alike spellings are not the platform names.
+TEST(CheckCode, Base64LookalikeNamesStayRefused) {
+    CHECK(HasReason(Check("Результат = Base64\x43" "трока(\"x\");"), "C_PARSE"));            // Latin C
+    CHECK(HasReason(Check("Результат = Base64Зн\x61" "чение(\"eA==\");"), "C_PARSE"));       // Latin a
+    CHECK(HasReason(Check("Результат = Base64Строка2(\"x\");"), "C_PARSE"));
+    CHECK(HasReason(Check("Результат = Base64Строка(1, 2);"), "C_BAD_ARGS"));
+    CHECK(HasReason(Check("Результат = Base64Строка();"), "C_BAD_ARGS"));
+    CHECK(HasReason(Check("Результат = Х.Base64Строка(\"x\");"), "C_COMMON_MODULE"));
+}
+
+namespace {
+std::string PolicyWithConstants() {
+    Json p = Json::parse(kPolicyABJson);
+    p["tables"]["Константа.КоличествоПотоков"] =
+        Json::parse(R"({"presentation": "protected", "fields": {"Значение": {"class": "open"}}})");
+    p["tables"]["Константа.ИмяОрганизации"] =
+        Json::parse(R"({"presentation": "protected", "fields": {"Значение": {"class": "protected"}}})");
+    p["tables"]["Константа.ОсновнойКонтрагент"] =
+        Json::parse(R"({"presentation": "protected", "fields": {"Значение": {"class": "open", "refs": ["Справочник.А"]}}})");
+    return p.dump();
+}
+}  // namespace
+
+// A constant's value takes the class of the policy field Константа.<Имя>.Значение.
+TEST(CheckCode, ConstantValueTakesThePolicyClass) {
+    const std::string pol = PolicyWithConstants();
+    const Json open = Check("Результат = Константы.КоличествоПотоков.Получить();", pol);
+    CHECK_EQ(Verdict(open), std::string("safe"));
+    CHECK_EQ(Label(open, "$"), std::string("open"));
+    CHECK_EQ(Verdict(Check("Результат = Константы.КоличествоПотоков.Получить() + 1;", pol)), std::string("safe"));
+    CHECK_EQ(Verdict(Check("Результат = Constants.КоличествоПотоков.Get();", pol)), std::string("safe"));
+    const Json prot = Check("Результат = Константы.ИмяОрганизации.Получить();", pol);
+    CHECK_EQ(Label(prot, "$"), std::string("protected"));
+    // ATTACK: computing over a protected constant is an oracle like over a protected field
+    for (const char* tail : {"Результат = СтрДлина(Константы.ИмяОрганизации.Получить());",
+                             "Результат = Константы.ИмяОрганизации.Получить() = Х;",
+                             "Результат = Константы.ИмяОрганизации.Получить() < \"x\";",
+                             "Результат = Лев(Константы.ИмяОрганизации.Получить(), 1);",
+                             "Результат = Base64Строка(Константы.ИмяОрганизации.Получить());",
+                             "Х = Константы.ИмяОрганизации.Получить();\nРезультат = Base64Строка(Х + \"a\");"}) {
+        const Json j = Check(tail, pol);
+        CHECK(Verdict(j) != std::string("safe"));
+        CHECK(HasReason(j, "C_FUNC_OVER_PROTECTED"));
+    }
+    // one equality with a client literal is the existing single-bit filter, as for any directly read protected value
+    CHECK_EQ(Label(Check("Результат = Константы.ИмяОрганизации.Получить() = \"x\";", pol), "$"), std::string("open"));
+    CHECK_EQ(Verdict(Check("Результат = Константы.ОсновнойКонтрагент.Получить();", pol)), std::string("safe"));
+    const Json deref = Check("Результат = Константы.ОсновнойКонтрагент.Получить().Имя;", pol);
+    CHECK_EQ(Verdict(deref), std::string("safe"));   // a masked presentation is returned, as for Ссылка.Имя
+    CHECK_EQ(Label(deref, "$"), std::string("protected"));
+    // a protected constant kept in a variable: one literal guess is the existing filter equality
+    CHECK_EQ(Verdict(Check("Х = Константы.ИмяОрганизации.Получить();\nРезультат = 0;\n"
+                           "Если Х = \"a\" Тогда Результат = 1; КонецЕсли;", pol)),
+             std::string("safe"));
+    // a computed guess in a loop is not
+    CHECK(Verdict(Check("Х = Константы.ИмяОрганизации.Получить();\nРезультат = 0;\nДля Н = 1 По 10 Цикл\n"
+                        "Если Х = \"a\" + Строка(Н) Тогда Результат = Н; КонецЕсли;\nКонецЦикла;", pol)) != std::string("safe"));
+    // unknown to the policy: the host is asked for the table, nothing runs
+    const Json missing = Check("Результат = Константы.НетТакой.Получить();", pol);
+    CHECK_EQ(Verdict(missing), std::string("incomplete"));
+    CHECK_EQ(missing["missing_tables"][0].get<std::string>(), std::string("Константа.НетТакой"));
+}
+
+// Only Получить() is a read; everything else on the constants manager is refused.
+TEST(CheckCode, ConstantsManagerStaysReadOnly) {
+    const std::string pol = PolicyWithConstants();
+    for (const char* code : {"Константы.КоличествоПотоков.Установить(1);\nРезультат = 1;",
+                             "Результат = Константы.КоличествоПотоков.Значение;",
+                             "Результат = Константы.КоличествоПотоков.СоздатьМенеджерЗначения();",
+                             "Результат = Константы.СоздатьНабор(\"КоличествоПотоков\");",
+                             "Результат = Константы.КоличествоПотоков.Получить(1);",
+                             "Результат = Справочники.А.Получить();",
+                             "Результат = Константы.КоличествоПотоков;",
+                             "Результат = Х.Константы.КоличествоПотоков.Получить();",
+                             "Имя = \"КоличествоПотоков\";\nРезультат = Константы[Имя].Получить();",
+                             "Результат = Константы[\"КоличествоПотоков\"].Получить();",
+                             "Результат = \x4B\xD0\xBE\x6E\x73\x74\x61\x6E\x74\xD1\x8B.КоличествоПотоков.Получить();"}) {   // Latin K, n, s, t, a, n, t
+        CHECK(Verdict(Check(code, pol)) != std::string("safe"));
+    }
+    // look-alike constant name (Latin A inside): not in the policy
+    CHECK(Verdict(Check("Результат = Константы.Количество\x50отоков.Получить();", pol)) != std::string("safe"));
 }

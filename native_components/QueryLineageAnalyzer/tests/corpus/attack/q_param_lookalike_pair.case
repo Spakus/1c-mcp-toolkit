@@ -1,0 +1,4 @@
+// kind: query
+// expect: confirm
+// reason: Q_PARSE_MIXED_SCRIPT
+ВЫБРАТЬ &ВидA КАК Первый, &ВидА КАК Второй

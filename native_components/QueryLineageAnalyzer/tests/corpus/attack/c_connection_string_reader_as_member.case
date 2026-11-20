@@ -1,0 +1,5 @@
+// kind: code
+// expect: confirm
+// reason: C_COMMON_MODULE
+// risk: R_CREDENTIALS
+Результат = Х.СтрокаСоединенияИнформационнойБазы();

@@ -274,7 +274,7 @@ private:
                 PrintField(e);
                 return;
             case AstExpr::K::Param:
-                if (!LexesAs("&" + e.text, Tk::Parameter) || IsRefusedMixedScript(e.text)) Fail("Q_PRINT_IDENT", "parameter");
+                if (!LexesAs("&" + e.text, Tk::Parameter) || IsRefusedMixedParam(e.text)) Fail("Q_PRINT_IDENT", "parameter");
                 W("&");
                 W(e.text);
                 return;

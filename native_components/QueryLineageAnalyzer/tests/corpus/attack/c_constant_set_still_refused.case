@@ -1,0 +1,6 @@
+// kind: code
+// expect: confirm
+// reason: C_UNKNOWN_METHOD
+// risk: R_WRITE
+Константы.КоличествоПотоков.Установить(1);
+Результат = 1;

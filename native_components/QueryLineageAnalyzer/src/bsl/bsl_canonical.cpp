@@ -110,7 +110,7 @@ ExprP Balanced(const std::vector<ExprP>& parts, size_t lo, size_t hi) {
     return MkExpr(Expr::K::Binary, "+", {Balanced(parts, lo, mid), Balanced(parts, mid, hi)});
 }
 
-// Query text -> "line" + Символы.ПС + "line" ...; empty text -> "".
+// Query text -> "line" + Символ(10) + "line" ...; empty text -> "".
 ExprP QueryTextExpr(const std::string& text) {
     if (!IsSafeStringValue(text)) throw Refuse{"C_PRINT_STRING", "query text"};
     std::vector<ExprP> parts;
@@ -120,7 +120,7 @@ ExprP QueryTextExpr(const std::string& text) {
         const std::string seg = text.substr(start, nl == std::string::npos ? std::string::npos : nl - start);
         if (!seg.empty()) parts.push_back(MkLit(Expr::L::String, seg));
         if (nl == std::string::npos) break;
-        parts.push_back(MkExpr(Expr::K::Member, "ПС", {MkExpr(Expr::K::Var, "Символы")}));
+        parts.push_back(MkExpr(Expr::K::Call, "Символ", {MkLit(Expr::L::Number, "10")}));
         start = nl + 1;
     }
     if (parts.empty()) return MkLit(Expr::L::String, "");

@@ -369,4 +369,31 @@ std::set<std::string> LocalMixedAliases(const std::string& query_utf8) {
     return out;
 }
 
+std::set<std::string> LocalMixedParams(const std::vector<std::string>& texts_utf8) {
+    std::set<std::string> out;
+    std::set<std::string> idents;   // identifiers and parameter names of all the texts
+    std::vector<std::vector<Token>> all;
+    for (const std::string& text : texts_utf8) all.push_back(Tokenize(text));
+    for (const std::vector<Token>& t : all) {
+        for (const Token& tok : t) {
+            if (tok.kind == Tk::Identifier) idents.insert(NormalizeIdentifierKey(tok.text));
+            else if (tok.kind == Tk::Parameter && tok.text.size() > 1) idents.insert(NormalizeIdentifierKey(tok.text.substr(1)));
+        }
+    }
+    for (const std::vector<Token>& t : all) {
+        for (const Token& tok : t) {
+            if (tok.kind != Tk::Parameter || tok.text.size() < 2) continue;
+            const std::string name = tok.text.substr(1);
+            if (HasLatinAndCyrillic(name) && !LooksLikeTokenParam(name) && !LooksLikeAnother(name, idents)) {
+                out.insert(NormalizeIdentifierKey(name));
+            }
+        }
+    }
+    return out;
+}
+
+std::set<std::string> LocalMixedParams(const std::string& query_utf8) {
+    return LocalMixedParams(std::vector<std::string>{query_utf8});
+}
+
 }  // namespace lineage::strict

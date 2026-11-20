@@ -47,4 +47,13 @@ bool IsIdentifierName(const std::string& name);
 // defines cannot stand for a platform or configuration object, a look-alike of one is not equal to it.
 std::set<std::string> LocalMixedAliases(const std::string& query_utf8);
 
+// Mixed-script parameter names the query text uses itself (normalized keys): `&ВидA`. Valid 1C. Only the parameter
+// position accepts them (mixed_script.h, IsRefusedMixedParam): a field, a table or an alias of that spelling stays
+// refused. A name that looks like another identifier or parameter of the same text, or like a token parameter, stays
+// refused too.
+std::set<std::string> LocalMixedParams(const std::string& query_utf8);
+// Several texts of one code: the look-alike test runs against the names of all of them, so a pair split across
+// two texts is refused as well (a sibling text never makes a confusable name pass).
+std::set<std::string> LocalMixedParams(const std::vector<std::string>& texts_utf8);
+
 }  // namespace lineage::strict

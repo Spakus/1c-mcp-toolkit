@@ -1,0 +1,4 @@
+// kind: code
+// expect: confirm
+// reason: C_UNKNOWN_MEMBER
+Результат = Константы.КоличествоПотоков.Значение;

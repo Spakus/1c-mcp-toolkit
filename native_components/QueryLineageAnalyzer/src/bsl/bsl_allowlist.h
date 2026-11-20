@@ -53,7 +53,8 @@ enum class Ty : uint8_t {
     Metadata,         // the global property Метаданные (the configuration's metadata root)
     MetaCollection,   // a collection of metadata objects (Метаданные.Роли, <объект>.Состав)
     ManagerRoot,      // Справочники / Документы / Перечисления / ...: VType::refs holds the singular kind
-    Manager           // Справочники.<Имя>: VType::refs holds the table ("Справочник.<Имя>")
+    Manager,          // Справочники.<Имя>: VType::refs holds the table ("Справочник.<Имя>")
+    Chars             // the global property Символы / Chars: its members are one-character strings
 };
 
 enum class Taint : uint8_t { Propagate, Open, Confirm, Emptiness, TypeOnly };
@@ -147,6 +148,9 @@ inline constexpr GlobalRule kGlobalRules[] = {
     // either way it is not stored data). See kPureReaders for their risk exemption.
     {"БезопасныйРежим", "SafeMode", Ty::Boolean, Taint::Open, 0, 0, ArgRule::Any},
     {"ТранзакцияАктивна", "TransactionActive", Ty::Boolean, Taint::Open, 0, 0, ArgRule::Any},
+    // The identity of the connected base (file path or server and base name), never a user name or a password, no stored
+    // data: an Open string, no argument. See kPureReaders for its risk exemption.
+    {"СтрокаСоединенияИнформационнойБазы", "InfoBaseConnectionString", Ty::String, Taint::Open, 0, 0, ArgRule::Any},
     {"НачалоДня", "BegOfDay", Ty::Date, Taint::Open, 1, 1, ArgRule::Any},
     {"КонецДня", "EndOfDay", Ty::Date, Taint::Open, 1, 1, ArgRule::Any},
     {"НачалоНедели", "BegOfWeek", Ty::Date, Taint::Open, 1, 1, ArgRule::Any},
@@ -179,6 +183,13 @@ inline constexpr GlobalRule kGlobalRules[] = {
     {"СтрРазделить", "StrSplit", Ty::Array, Taint::Open, 2, 3, ArgRule::Any},
     {"СтрСравнить", "StrCompare", Ty::Number, Taint::Open, 2, 3, ArgRule::Any},
     {"XMLСтрока", "XMLString", Ty::String, Taint::Open, 1, 1, ArgRule::Any},
+    // Base64: a re-encoding of a value. Open: a reference is read as its presentation; over protected data the walk adds
+    // C_FUNC_OVER_PROTECTED and the result is derived (EvalCall), so re-encoding never unmasks. BinaryData has no type of
+    // its own here: an opaque scalar (Ty::String); Ty::Unknown would make every later use C_FUNC_OVER_PROTECTED.
+    {"Base64Строка", "Base64String", Ty::String, Taint::Open, 1, 1, ArgRule::Any},
+    {"Base64Значение", "Base64Value", Ty::String, Taint::Open, 1, 1, ArgRule::Any},
+    {"ПолучитьДвоичныеДанныеИзBase64Строки", "GetBinaryDataFromBase64String", Ty::String, Taint::Open, 1, 1, ArgRule::Any},
+    {"ПолучитьBase64СтрокуИзДвоичныхДанных", "GetBase64StringFromBinaryData", Ty::String, Taint::Open, 1, 1, ArgRule::Any},
     {"Pow", "Pow", Ty::Number, Taint::Open, 2, 2, ArgRule::Any},
     // Session rights and configuration state: Boolean answers about the configuration, not stored data.
     {"РольДоступна", "IsInRole", Ty::Boolean, Taint::Open, 1, 1, ArgRule::Any},
@@ -198,7 +209,8 @@ inline constexpr const char* kStringFunctions[] = {
     "StrFind", "StrStartsWith", "StrEndsWith", "StrOccurrenceCount", "StrSplit", "StrCompare"};
 
 // Global properties read without a call. Managers carry the singular table kind of their tables; registers,
-// constants, data processors, reports and common modules are deliberately absent (writes, R_* names, arbitrary code).
+// data processors, reports and common modules are deliberately absent (writes, R_* names, arbitrary code).
+// Constants: read through Получить() only, see EvalMethod.
 struct GlobalProperty {
     const char* ru;
     const char* en;
@@ -208,6 +220,7 @@ struct GlobalProperty {
 
 inline constexpr GlobalProperty kGlobalProperties[] = {
     {"Метаданные", "Metadata", Ty::Metadata, nullptr},
+    {"Символы", "Chars", Ty::Chars, nullptr},
     {"Справочники", "Catalogs", Ty::ManagerRoot, "Справочник"},
     {"Документы", "Documents", Ty::ManagerRoot, "Документ"},
     {"Перечисления", "Enums", Ty::ManagerRoot, "Перечисление"},
@@ -216,6 +229,7 @@ inline constexpr GlobalProperty kGlobalProperties[] = {
     {"ПланыСчетов", "ChartsOfAccounts", Ty::ManagerRoot, "ПланСчетов"},
     {"БизнесПроцессы", "BusinessProcesses", Ty::ManagerRoot, "БизнесПроцесс"},
     {"Задачи", "Tasks", Ty::ManagerRoot, "Задача"},
+    {"Константы", "Constants", Ty::ManagerRoot, "Константа"},
 };
 
 inline constexpr NewRule kNewRules[] = {
@@ -278,6 +292,9 @@ inline constexpr MethodRule kMethodRules[] = {
     // НайтиПоКоду (equality oracles over protected strings), not Выбрать / СоздатьЭлемент / ПолучитьОбъект.
     {Ty::Manager, "ПолучитьСсылку", "GetRef", Ty::Ref, Taint::Open, 0, 1, ArgRule::Any},
     {Ty::Manager, "ПустаяСсылка", "EmptyRef", Ty::Ref, Taint::Open, 0, 0, ArgRule::Any},
+    // Константы.<Имя>.Получить(): the value takes the class of the policy field Константа.<Имя>.Значение; any other
+    // manager has no such method (refused in the walk).
+    {Ty::Manager, "Получить", "Get", Ty::Unknown, Taint::Open, 0, 0, ArgRule::Any},
     // A lookup by a code is a filter by equality: over a client value it is open, over a protected
     // value C_FUNC_OVER_PROTECTED. The result is a reference of the manager's table; its presentation stays protected.
     {Ty::Manager, "НайтиПоКоду", "FindByCode", Ty::Ref, Taint::Open, 1, 2, ArgRule::Any},
@@ -288,6 +305,13 @@ inline constexpr MethodRule kMethodRules[] = {
 };
 
 inline constexpr PropertyRule kPropertyRules[] = {
+    // The platform enumeration Символы: fixed one-character strings, open values.
+    {Ty::Chars, "ПС", "LF", Ty::String},
+    {Ty::Chars, "ВК", "CR", Ty::String},
+    {Ty::Chars, "ПФ", "FF", Ty::String},
+    {Ty::Chars, "Таб", "Tab", Ty::String},
+    {Ty::Chars, "ВТаб", "VTab", Ty::String},
+    {Ty::Chars, "НПП", "NBSp", Ty::String},
     {Ty::ValueTable, "Колонки", "Columns", Ty::ColumnCollection},
     {Ty::Metadata, "Справочники", "Catalogs", Ty::MetaCollection},
     {Ty::Metadata, "Документы", "Documents", Ty::MetaCollection},
@@ -332,13 +356,16 @@ struct RiskRule {
     RiskMatch match;
 };
 
-// Exactly these global calls, written with NO argument (БезопасныйРежим(), ТранзакцияАктивна()), only read session
-// state: they raise no risk although their names match a risk row below (Contains "БезопасныйРежим", "Транзакц").
+// Exactly these global calls, written with NO argument (БезопасныйРежим(), ТранзакцияАктивна(),
+// СтрокаСоединенияИнформационнойБазы()), only read session or base identity state: they raise no risk although their names
+// match risk rows below (Contains "БезопасныйРежим", "Транзакц"; the credential rows "ИнформационнойБаз", "СтрокаСоединения",
+// "Соединени" and their English forms are skipped for exactly these names only).
 // Applied before the rows, to a plain Call node / identifier token only: a method (Х.БезопасныйРежим()), a call with
 // an argument, a variable, a "Новый" type, a setter (УстановитьБезопасныйРежим) or a longer name never qualifies.
 // Keys are AllowlistKey forms (see PureReaderKeys in bsl_taint.cpp).
 inline constexpr const char* kPureReaders[] = {"БезопасныйРежим", "SafeMode", "ТранзакцияАктивна",
-                                               "TransactionActive"};
+                                               "TransactionActive", "СтрокаСоединенияИнформационнойБазы",
+                                               "InfoBaseConnectionString"};
 
 inline constexpr RiskRule kRiskRules[] = {
     // ---- Protection

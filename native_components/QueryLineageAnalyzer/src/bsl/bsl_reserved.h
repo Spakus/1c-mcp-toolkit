@@ -3,12 +3,12 @@
 
 #include "utf_utils.h"
 
-// Names the strict pipeline injects into the code it executes: the bound-value array (МСПЗначенияТокенов) and the
-// platform enumeration used for line breaks in printed query text (Символы / Chars). Client code must never use
-// them as a variable, callee, "Новый" type, loop variable or assignment target (they could be pre-assigned or
-// shadowed, changing what the printed code means). Member names after a dot are not affected. Matching is
-// case-insensitive and folds ё to е. The parser and ValidateBody reject them with C_RESERVED; only the canonical
-// printer creates them.
+// The name the strict pipeline injects into the code it executes: the bound-value array (МСПЗначенияТокенов).
+// Client code must never use it as a variable, callee, "Новый" type, loop variable or assignment target (it could be
+// pre-assigned or shadowed, changing what the printed code means). Member names after a dot are not affected.
+// Matching is case-insensitive and folds ё to е. The parser and ValidateBody reject it with C_RESERVED; only the
+// canonical printer creates it. Line breaks in printed query text use the global call Символ(10), which needs no
+// injected name: a client variable cannot change what a call prints.
 
 namespace lineage::bsl {
 
@@ -19,7 +19,7 @@ inline bool IsReservedName(const std::string& name) {
             key[p + 1] = static_cast<char>(0x95);   // Ё -> Е
         }
     }
-    return key == "МСПЗНАЧЕНИЯТОКЕНОВ" || key == "СИМВОЛЫ" || key == "CHARS";
+    return key == "МСПЗНАЧЕНИЯТОКЕНОВ";
 }
 
 }  // namespace lineage::bsl

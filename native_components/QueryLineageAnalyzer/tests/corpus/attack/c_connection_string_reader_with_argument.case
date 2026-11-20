@@ -1,0 +1,5 @@
+// kind: code
+// expect: confirm
+// reason: C_BAD_ARGS
+// risk: R_CREDENTIALS
+Результат = СтрокаСоединенияИнформационнойБазы("x");

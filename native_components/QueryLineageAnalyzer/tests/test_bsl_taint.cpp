@@ -213,8 +213,7 @@ TEST(BslTaint, GlobalFunctionAllowlist) {
                            "Результат = XMLСтрока(1);", "Результат = СтрСравнить(\"a\", \"b\");"})
         CHECK(Safe(ok));
     for (const char* bad : {"Результат = Сообщить(\"x\");", "Результат = УстановитьПривилегированныйРежим(Истина);",
-                            "Результат = ОписаниеОшибки();", "Результат = ИнформацияОбОшибке();",
-                            "Результат = СтрокаСоединенияИнформационнойБазы();"})
+                            "Результат = ОписаниеОшибки();", "Результат = ИнформацияОбОшибке();"})
         CHECK(Denied(bad, "C_UNKNOWN_IDENT"));
     CHECK(Denied("Н = \"Строка\"; Результат = Тип(Н);", "C_DYNAMIC_KEY"));
 }
@@ -609,7 +608,7 @@ TEST(BslTaint, RiskClasses) {
                   "R_PROTECTION"));
     CHECK(HasRisk(CheckCodeForTest(kPolicyAB, "ФоновыеЗадания.Выполнить(\"М.П\"); Результат = 1;"), "R_DEFERRED"));
     CHECK(HasRisk(CheckCodeForTest(kPolicyAB, "ЗаписьЖурналаРегистрации(\"x\"); Результат = 1;"), "R_WRITE"));
-    CHECK(HasRisk(CheckCodeForTest(kPolicyAB, "Результат = СтрокаСоединенияИнформационнойБазы();"), "R_CREDENTIALS"));
+    CHECK(HasRisk(CheckCodeForTest(kPolicyAB, "Результат = СтрокаСоединенияИнформационнойБазы(\"x\");"), "R_CREDENTIALS"));
 }
 
 TEST(BslTaint, RiskIsShownButDoesNotDecide) {
@@ -641,7 +640,7 @@ TEST(BslTaint, RiskNamesFoldCaseYoAndEnglish) {
     CHECK(OnlyRisk("Результат = хранилищеобщихнастроек.Загрузить(\"a\", \"b\");", "R_PROTECTION"));
     CHECK(OnlyRisk("Результат = CommonSettingsStorage.Load(\"a\", \"b\");", "R_PROTECTION"));
     CHECK(OnlyRisk("Результат = commonsettingsstorage.Load(\"a\", \"b\");", "R_PROTECTION"));
-    CHECK(OnlyRisk("Результат = InfoBaseConnectionString();", "R_CREDENTIALS"));
+    CHECK(OnlyRisk("Результат = InfoBaseConnectionString(1);", "R_CREDENTIALS"));
     CHECK(OnlyRisk("Результат = BackgroundJobs.Execute(\"M.P\");", "R_DEFERRED"));
     CHECK(OnlyRisk("WriteLogEvent(\"x\"); Результат = 1;", "R_WRITE"));
     CHECK(OnlyRisk("Результат = ВладелецФормы;", "R_PROTECTION"));
@@ -844,7 +843,7 @@ TEST(BslTaint, SortByLiteralOpenColumns) {
 }
 
 // A text made only of string literals joined with "+" (any grouping) is folded; through a variable it is not (the
-// attack corpus pins that: c_query_text_from_variable), and Символы is reserved, so Символы.ПС never reaches it.
+// attack corpus pins that: c_query_text_from_variable), and Символы.ПС is a member read, not a literal, so it makes the text dynamic.
 TEST(BslTaint, LiteralOnlyQueryTextIsFolded) {
     const auto r = CheckCodeForTest(kPolicyAB,
         "Т = Новый Запрос(\"ВЫБРАТЬ Б.Сумма КАК Сумма \" + (\"ИЗ Справочник.Б\" + \" КАК Б\")).Выполнить().Выгрузить();\n"
@@ -855,7 +854,7 @@ TEST(BslTaint, LiteralOnlyQueryTextIsFolded) {
     CHECK(Denied("Л = Истина; Если Л Тогда Т = \"ВЫБРАТЬ 1\"; Иначе Т = \"ВЫБРАТЬ 2\"; КонецЕсли; З = Новый Запрос(\"\" + Т); Результат = 1;", "C_DYNAMIC_QUERY"));
     CHECK(Denied("З = Новый Запрос(\"ВЫБРАТЬ 1\" + 2); Результат = 1;", "C_DYNAMIC_QUERY"));
     CHECK(HasCodeReason(CheckCodeForTest(kPolicyAB, "З = Новый Запрос(\"ВЫБРАТЬ\" + Символы.ПС + \"1\"); Результат = 1;"),
-                        "C_RESERVED"));
+                        "C_DYNAMIC_QUERY"));
 }
 
 // A chain on "Новый Запрос(<text>)" is typed like the same steps on a variable; the query is never bound.

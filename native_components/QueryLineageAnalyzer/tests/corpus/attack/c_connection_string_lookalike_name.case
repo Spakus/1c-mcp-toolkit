@@ -1,0 +1,5 @@
+// kind: code
+// expect: confirm
+// reason: C_UNKNOWN_IDENT
+// risk: R_CREDENTIALS
+Результат = СтрокаСоединенияВнешнегоИсточника();

@@ -1,0 +1,4 @@
+// kind: code
+// expect: confirm
+// reason: C_PARSE
+Результат = Base64Cтрока("x");

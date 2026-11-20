@@ -497,7 +497,46 @@ TEST(CheckQuery, MixedScriptParamNameIsAccepted) {
     CHECK_EQ(j["verdict"].get<std::string>(), std::string("safe"));
     CHECK_EQ(j["columns"][0]["origin"].get<std::string>(), std::string("client"));
     auto named = Check("ВЫБРАТЬ &ДатаНачалаUTC КАК Х", policy);
-    CHECK(Codes(named) == std::vector<std::string>{"Q_PARSE_MIXED_SCRIPT"});
+    CHECK_EQ(named["verdict"].get<std::string>(), std::string("safe"));
+    CHECK_EQ(named["columns"][0]["origin"].get<std::string>(), std::string("client"));
+}
+
+// A mixed-script parameter name written in the query text passes; the same mixing in a field, a table or an alias
+// that the text does not define stays refused; a name that looks like another name of the text is refused.
+// Latin letters below are real Latin characters inside Cyrillic words.
+TEST(CheckQuery, MixedScriptParameterNames) {
+    const std::string policy = TokenPolicy(R"({"ВидA": "client", "ИдA2": "client", "УзелERP": "client"})");
+    for (const char* q : {"ВЫБРАТЬ &ВидA КАК Х", "ВЫБРАТЬ &ИдA2 КАК Х", "ВЫБРАТЬ &УзелERP КАК Х"}) {
+        const auto j = Check(q, policy);
+        CHECK_EQ(j["verdict"].get<std::string>(), std::string("safe"));
+        CHECK_EQ(j["columns"][0]["origin"].get<std::string>(), std::string("client"));
+    }
+    // ATTACK: look-alike of another parameter / identifier of the same text (Latin A vs Cyrillic A)
+    CHECK(HasCode(Check("ВЫБРАТЬ &ВидA КАК Х, &ВидА КАК У", policy), "Q_PARSE_MIXED_SCRIPT"));
+    CHECK(HasCode(Check("ВЫБРАТЬ &ВидA КАК ВидА", policy), "Q_PARSE_MIXED_SCRIPT"));
+    // ATTACK: the parameter allowance does not widen to a field, a table, or an alias the text does not define
+    CHECK(HasCode(Check("ВЫБРАТЬ &ВидA КАК Х ИЗ Справочник.А КАК А ГДЕ А.ВидA = 1", policy), "Q_PARSE_MIXED_SCRIPT"));
+    CHECK(HasCode(Check("ВЫБРАТЬ &ВидA КАК Х ИЗ Справочник.ВидA КАК А", policy), "Q_PARSE_MIXED_SCRIPT"));
+    CHECK(HasCode(Check("ВЫБРАТЬ А.ВидA ИЗ Справочник.А КАК А ГДЕ А.Код = &ВидA", policy), "Q_PARSE_MIXED_SCRIPT"));
+    CHECK(HasCode(Check("ВЫБРАТЬ ВидA.Код ИЗ Справочник.А КАК А ГДЕ А.Код = &ВидA", policy), "Q_PARSE_MIXED_SCRIPT"));
+    // ATTACK: the parameter as a bare name is not a field: no alias, no field reference
+    CHECK(HasCode(Check("ВЫБРАТЬ ВидA ИЗ Справочник.А КАК А ГДЕ А.Код = &ВидA", policy), "Q_PARSE_MIXED_SCRIPT"));
+    // ATTACK: the parameter inside В (...), ПОДОБНО, a nested query
+    CHECK(!HasCode(Check("ВЫБРАТЬ А.Код КАК Х ИЗ Справочник.А КАК А ГДЕ А.Код В (&ВидA)", policy), "Q_PARSE_MIXED_SCRIPT"));
+    CHECK(HasCode(Check("ВЫБРАТЬ А.Код КАК Х ИЗ Справочник.А КАК А ГДЕ А.Код В (&ВидA, &ВидА)", policy),
+                  "Q_PARSE_MIXED_SCRIPT"));
+    CHECK(!HasCode(Check("ВЫБРАТЬ А.Код КАК Х ИЗ Справочник.А КАК А ГДЕ А.Код ПОДОБНО &ВидA", policy),
+                   "Q_PARSE_MIXED_SCRIPT"));
+    CHECK(HasCode(Check("ВЫБРАТЬ А.Код КАК Х ИЗ Справочник.А КАК А ГДЕ А.Код ПОДОБНО &ВидA И А.Код = А.ВидA", policy),
+                  "Q_PARSE_MIXED_SCRIPT"));
+    CHECK(!HasCode(Check("ВЫБРАТЬ Н.Код КАК Х ИЗ (ВЫБРАТЬ А.Код КАК Код ИЗ Справочник.А КАК А ГДЕ А.Код = &ВидA) КАК Н",
+                         policy), "Q_PARSE_MIXED_SCRIPT"));
+    CHECK(HasCode(Check("ВЫБРАТЬ Н.Код КАК Х ИЗ (ВЫБРАТЬ А.Код КАК Код ИЗ Справочник.А КАК А ГДЕ А.Код = &ВидA) КАК Н "
+                        "ГДЕ Н.ВидA = 1", policy), "Q_PARSE_MIXED_SCRIPT"));
+    // A parameter that imitates the host's token parameter (Latin M, "МСПТокен1") never takes the token's origin.
+    const auto spoof = Check("ВЫБРАТЬ &MСПТокен1 КАК Х", policy);
+    CHECK_EQ(spoof["verdict"].get<std::string>(), std::string("confirm"));
+    CHECK(HasCode(spoof, "Q_PARSE_MIXED_SCRIPT"));
 }
 
 

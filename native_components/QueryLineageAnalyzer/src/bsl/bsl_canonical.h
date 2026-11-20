@@ -22,7 +22,7 @@
 //
 // Replacements (applied before printing, each target must occur in the tree exactly as a node pointer):
 //   query_replacements: the node becomes the given text, built from single-line string literals joined with
-//     "+ Символы.ПС +" at every line break, so no "|" appears in the output;
+//     "+ Символ(10) +" at every line break, so no "|" appears in the output;
 //   bound_tokens: the node becomes МСПЗначенияТокенов[<n>].
 // A replacement on a node of an assignment-target chain is a refusal (C_PRINT_REPLACEMENT). A reserved name
 // (bsl_reserved.h) in the original tree is a refusal (C_PRINT_RESERVED); only the printer itself creates them.

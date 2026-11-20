@@ -1,0 +1,5 @@
+// kind: code
+// expect: confirm
+// reason: C_UNKNOWN_INDEX
+Имя = "КоличествоПотоков";
+Результат = Константы[Имя].Получить();

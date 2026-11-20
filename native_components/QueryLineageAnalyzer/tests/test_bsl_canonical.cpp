@@ -206,7 +206,7 @@ TEST(BslCanonical, QueryReplacementUsesConcatenation) {
     CHECK(p.ok);
     CHECK(p.text.find('|') == std::string::npos);
     CHECK_EQ(p.text,
-             "Запрос.Текст = \"ВЫБРАТЬ\" + (Символы.ПС + \"    1 КАК А\") + (Символы.ПС + \"ИЗ\" + (Символы.ПС + \"    Т \"\"q\"\"\"));\n"
+             "Запрос.Текст = \"ВЫБРАТЬ\" + (Символ(10) + \"    1 КАК А\") + (Символ(10) + \"ИЗ\" + (Символ(10) + \"    Т \"\"q\"\"\"));\n"
              "Результат = 1;\n");
     CHECK(ParseBsl(p.text, true).ok);
 }
@@ -217,7 +217,7 @@ TEST(BslCanonical, QueryReplacementEdgeCases) {
     o.query_replacements[b.stmts[0]->exprs[1].get()] = "";
     CHECK_EQ(PrintBslCanonical(b, o), "Т = \"\";\n");
     o.query_replacements[b.stmts[0]->exprs[1].get()] = "\nA\n";
-    CHECK_EQ(PrintBslCanonical(b, o), "Т = Символы.ПС + (\"A\" + Символы.ПС);\n");
+    CHECK_EQ(PrintBslCanonical(b, o), "Т = Символ(10) + (\"A\" + Символ(10));\n");
     o.query_replacements[b.stmts[0]->exprs[1].get()] = "a\rb";
     CHECK_EQ(CodeOfPrint(b, o), std::string("C_PRINT_STRING"));
     o.query_replacements[b.stmts[0]->exprs[1].get()] = "a\xe2\x80\xae";
@@ -276,9 +276,8 @@ TEST(BslCanonical, LongQueryReplacementRoundTrips) {
 
 TEST(BslCanonical, ReservedNamesAreRejectedByParser) {
     const char* bad[] = {
-        "МСПЗначенияТокенов = 1;", "мспзначенияТОКЕНОВ[0] = 1;", "МСПЗначенияТокенов[0] = 1;", "Символы = 1;",
-        "символы.ПС = 1;", "Chars = 1;", "CHARS[1] = 2;", "Р = Символы;", "Для Символы = 1 По 2 Цикл КонецЦикла;",
-        "Для Каждого chars Из Х Цикл КонецЦикла;", "Р = Новый Символы;", "Р = Chars(1);",
+        "МСПЗначенияТокенов = 1;", "мспзначенияТОКЕНОВ[0] = 1;", "МСПЗначенияТокенов[0] = 1;",
+        "Для МСПЗначенияТокенов = 1 По 2 Цикл КонецЦикла;", "Р = Новый МСПЗначенияТокенов;",
         "МСПЗнач\xd1\x91нияТокенов = 1;",   // yo-folded spelling
         "\xd0\xbc\xd1\x81\xd0\xbf\xd0\x97\xd0\xbd\xd0\xb0\xd1\x87\xd0\xb5\xd0\xbd\xd0\xb8\xd1\x8f\xd0\xa2\xd0\xbe\xd0\xba\xd0\xb5\xd0\xbd\xd0\xbe\xd0\xb2 = 1;",
     };
@@ -288,13 +287,15 @@ TEST(BslCanonical, ReservedNamesAreRejectedByParser) {
         CHECK_EQ(r.error.code, std::string("C_RESERVED"));
     }
     CHECK(ParseBsl("Р = Х.Символы + Х.МСПЗначенияТокенов;").ok);   // member names are not reserved
-    CHECK(ParseBsl("Символы = 1;", true).ok);                       // printer re-parse only
+    CHECK(ParseBsl("Символы = 1;").ok);   // the platform enumeration is no longer reserved
+    CHECK(ParseBsl("Р = Chars.LF;").ok);
+    CHECK(ParseBsl("Для Каждого chars Из Х Цикл КонецЦикла;").ok);
 }
 
 TEST(BslCanonical, ReservedNamesInHandBuiltTreesAreRefused) {
-    CHECK_EQ(CodeOfPrint(AssignBody(Mk(Expr::K::Var, "Символы"))), std::string("C_PRINT_RESERVED"));
+    CHECK_EQ(CodeOfPrint(AssignBody(Mk(Expr::K::Var, "МСПЗначенияТокенов"))), std::string("C_PRINT_RESERVED"));
     CHECK_EQ(CodeOfPrint(AssignBody(Mk(Expr::K::Call, "МСПЗначенияТокенов"))), std::string("C_PRINT_RESERVED"));
-    CHECK_EQ(CodeOfPrint(AssignBody(Mk(Expr::K::New, "chars"))), std::string("C_PRINT_RESERVED"));
+    CHECK_EQ(CodeOfPrint(AssignBody(Mk(Expr::K::New, "мспзначенияТокенов"))), std::string("C_PRINT_RESERVED"));
     auto s = std::make_shared<Stmt>();
     s->kind = Stmt::K::Assign;
     s->exprs = {Mk(Expr::K::Index, "", {Mk(Expr::K::Var, "МСПЗначенияТокенов"), StrLit("a")}), StrLit("b")};
@@ -303,7 +304,7 @@ TEST(BslCanonical, ReservedNamesInHandBuiltTreesAreRefused) {
     CHECK_EQ(CodeOfPrint(b), std::string("C_PRINT_RESERVED"));
     auto f = std::make_shared<Stmt>();
     f->kind = Stmt::K::ForEach;
-    f->var = "Символы";
+    f->var = "МСПЗначенияТокенов";
     f->exprs = {Mk(Expr::K::Var, "Х")};
     f->blocks.emplace_back();
     Body fb;
@@ -351,4 +352,17 @@ TEST(BslCanonical, NegationAndNotOperands) {
     CheckRoundTrip("Р = (НЕ А) + 1;");
     CHECK_EQ(PrintedOrEmpty("Р = А - (-1);"), "Р = А - (-1);\n");
     CHECK_EQ(PrintedOrEmpty("Р = НЕ А И Б;"), "Р = (НЕ А) И Б;\n");
+}
+
+// The printed line break is the allowlisted global call Символ(10): two breaks, no "|", re-parses without allow_reserved.
+TEST(BslCanonical, QueryReplacementPrintsLineBreakAsSymbolCall) {
+    const Body b = ParseOk("Запрос.Текст = \"x\"; Результат = 1;");
+    PrintOptions o;
+    o.query_replacements[b.stmts[0]->exprs[1].get()] = "a\nb\nc";
+    const PrintResult p = PrintBslCanonicalChecked(b, o);
+    CHECK(p.ok);
+    CHECK(p.text.find('|') == std::string::npos);
+    CHECK(p.text.find("Символы") == std::string::npos);
+    CHECK(p.text.find("\"a\" + (Символ(10) + \"b\"") != std::string::npos || p.text.find("Символ(10)") != std::string::npos);
+    CHECK(ParseBsl(p.text).ok);
 }

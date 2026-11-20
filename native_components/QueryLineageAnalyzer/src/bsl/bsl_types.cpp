@@ -856,7 +856,7 @@ private:
             return ElementOf(obj, Origin::Open);
         }
         if (obj.ty == Ty::MetaCollection) return Typed(Ty::MetaObject, Origin::Open);   // Метаданные.Роли.<Имя>
-        if (obj.ty == Ty::ManagerRoot || obj.ty == Ty::Manager) return ManagerMember(obj, e.text);
+        if (obj.ty == Ty::ManagerRoot || obj.ty == Ty::Manager) return ManagerMember(obj, e.text, e.pos);
         const auto it = T().properties.find({static_cast<int>(obj.ty), key});
         if (it == T().properties.end()) {
             Add("C_UNKNOWN_MEMBER", e.pos);
@@ -878,13 +878,56 @@ private:
 
     // Справочники.<Имя> is the manager of the table "Справочник.<Имя>"; <менеджер>.<Имя> is a predefined item or an
     // enum value: a reference to that table (the platform fails on any other name).
-    static VType ManagerMember(const VType& obj, const std::string& name) {
+    VType ManagerMember(const VType& obj, const std::string& name, const Pos& pos) {
+        if (obj.ty == Ty::Manager && IsConstantManager(obj)) {   // КонстантаМенеджер has no member but its methods
+            Add("C_UNKNOWN_MEMBER", pos);
+            return VType();
+        }
         VType v = Typed(obj.ty == Ty::ManagerRoot ? Ty::Manager : Ty::Ref, Origin::Open);
         if (obj.ty == Ty::ManagerRoot) {
             for (const std::string& kind : obj.refs) v.refs.insert(kind + "." + name);
         } else {
             v.refs = obj.refs;
             v.ref_unknown = false;
+        }
+        return v;
+    }
+
+    static bool IsConstantManager(const VType& v) {
+        static const std::string kPrefix = "Константа.";
+        if (v.refs.empty()) return false;
+        for (const std::string& t : v.refs) {
+            if (t.compare(0, kPrefix.size(), kPrefix) != 0) return false;
+        }
+        return true;
+    }
+
+    // Константы.<Имя>.Получить(): the field Значение of the policy table Константа.<Имя>, read like Ссылка.Значение.
+    // Another manager has no such method.
+    VType ConstantValue(const VType& recv, const Expr& call) {
+        if (!IsConstantManager(recv)) {
+            Add("C_UNKNOWN_METHOD", call.pos);
+            return VType();
+        }
+        VType ref = Typed(Ty::Ref, Origin::Open);
+        ref.refs = recv.refs;
+        ref.ref_unknown = false;
+        Expr field;
+        field.kind = Expr::K::Member;
+        field.text = "Значение";
+        field.pos = call.pos;
+        VType v = Dereference(ref, field);
+        if (v.ty == Ty::Unknown && v.refs.empty() && v.label != Origin::Unknown && options_.policy) {
+            // A field the policy lists without targets and with known targets is provably not a reference: a scalar.
+            bool scalar = true;
+            for (const std::string& t : recv.refs) {
+                const strict::FieldInfo* f = options_.policy->Field(t, "Значение");
+                if (!f || !f->refs.empty() || !f->refs_known) scalar = false;
+            }
+            if (scalar) {
+                v.cell = true;
+                v.ref_unknown = false;
+            }
         }
         return v;
     }
@@ -1232,6 +1275,7 @@ private:
             case Ty::Metadata:
             case Ty::MetaCollection:
             case Ty::Manager: {
+                if (rule.receiver == Ty::Manager && m == AllowlistKey("Получить")) return ConstantValue(recv, e);
                 // Structure lookups by name / UUID: only the arguments can carry data.
                 std::optional<Origin> input;
                 for (const VType& a : args) JoinInto(input, ReadAsValue(a));

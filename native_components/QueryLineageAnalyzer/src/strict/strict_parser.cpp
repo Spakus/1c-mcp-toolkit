@@ -63,6 +63,15 @@ bool IsValidIdent(const std::string& s) {
     return !IsRefusedMixedScript(s);
 }
 
+// A parameter name after '&': the identifier charset, mixed scripts only when the check installed the name.
+bool IsValidParamName(const std::string& s) {
+    if (s.empty()) return false;
+    for (size_t i = 0, len = 1; i < s.size(); i += len) {
+        if (!IsIdentChar(s, i, len, i == 0)) return false;
+    }
+    return !IsRefusedMixedParam(s);
+}
+
 bool IsValidDotted(const std::string& s) {
     size_t start = 0;
     for (;;) {
@@ -403,7 +412,10 @@ ExprP P::Primary() {
             return Leaf(AstExpr::K::NumberLit, pos, t.text);
         case Tk::Parameter:
             Next();
-            CheckName(t);
+            if (IsRefusedMixedParam(t.text.substr(1))) {   // same refusal as CheckName, for the parameter alphabet
+                --i_;
+                Error("Q_PARSE_MIXED_SCRIPT");
+            }
             return Leaf(AstExpr::K::Param, pos, t.text.substr(1));
         case Tk::Identifier:
             return IdentifierExpr();
@@ -1067,7 +1079,7 @@ bool Walk(std::vector<Item> stack, ParseError& err) {
                 }
                 break;
             case AstExpr::K::Param:
-                if (n != 0 || !IsValidIdent(e.text)) return bad(&e, "parameter name");
+                if (n != 0 || !IsValidParamName(e.text)) return bad(&e, "parameter name");
                 break;
             case AstExpr::K::NumberLit:
                 if (n != 0 || !IsNumberText(e.text)) return bad(&e, "number literal");

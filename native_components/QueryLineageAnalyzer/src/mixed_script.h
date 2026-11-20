@@ -36,25 +36,35 @@ inline constexpr const char* kPlatformMixedNames[] = {
     "XMLСтрока", "XMLЗначение", "XMLТип", "XMLТипЗнч", "СхемаXML", "ПостроительСхемXML",
     "ФабрикаXDTO", "СериализаторXDTO", "ОбъектXDTO", "ТипОбъектаXDTO", "ТипЗначенияXDTO", "ПакетXDTO",
     "ДокументDOM", "ПостроительDOM", "ЗаписьDOM", "ЗаписьFastInfoset", "ЧтениеFastInfoset", "ПреобразованиеXSL",
+    "Base64Строка", "Base64Значение", "ПолучитьДвоичныеДанныеИзBase64Строки", "ПолучитьBase64СтрокуИзДвоичныхДанных",
     "HTTPСоединение", "HTTPЗапрос", "HTTPОтвет", "HTTPСервисОтвет", "COMОбъект", "WSПрокси", "WSОпределения",
 };
 
 namespace detail {
 inline thread_local const std::set<std::string>* g_known_mixed_names = nullptr;   // NormalizeIdentifierKey keys
+inline thread_local const std::set<std::string>* g_known_mixed_params = nullptr;   // parameter names, same keys
 }
 
 // Installs the configuration's mixed names (normalized keys) for one check on this thread; restores on exit.
+// `param_keys` are the mixed parameter names the checked text uses itself (strict::LocalMixedParams): a separate set,
+// so a parameter named like a field or a table never makes that field or table acceptable.
 class KnownMixedNamesScope {
 public:
-    explicit KnownMixedNamesScope(const std::set<std::string>* keys) : saved_(detail::g_known_mixed_names) {
+    explicit KnownMixedNamesScope(const std::set<std::string>* keys, const std::set<std::string>* param_keys = nullptr)
+        : saved_(detail::g_known_mixed_names), saved_params_(detail::g_known_mixed_params) {
         detail::g_known_mixed_names = keys;
+        detail::g_known_mixed_params = param_keys;
     }
-    ~KnownMixedNamesScope() { detail::g_known_mixed_names = saved_; }
+    ~KnownMixedNamesScope() {
+        detail::g_known_mixed_names = saved_;
+        detail::g_known_mixed_params = saved_params_;
+    }
     KnownMixedNamesScope(const KnownMixedNamesScope&) = delete;
     KnownMixedNamesScope& operator=(const KnownMixedNamesScope&) = delete;
 
 private:
     const std::set<std::string>* saved_;
+    const std::set<std::string>* saved_params_;
 };
 
 inline bool IsPlatformMixedName(const std::string& s) {
@@ -71,6 +81,14 @@ inline bool IsRefusedMixedScript(const std::string& s) {
     if (!HasLatinAndCyrillic(s) || IsPlatformMixedName(s)) return false;
     const std::set<std::string>* known = detail::g_known_mixed_names;
     return known == nullptr || known->count(NormalizeIdentifierKey(s)) == 0;
+}
+
+// A query parameter name (without '&'): refused when it mixes scripts and the check did not install it as one the
+// query text uses itself. Fields, tables and aliases never consult this set.
+inline bool IsRefusedMixedParam(const std::string& name) {
+    if (!HasLatinAndCyrillic(name)) return false;
+    const std::set<std::string>* known = detail::g_known_mixed_params;
+    return known == nullptr || known->count(NormalizeIdentifierKey(name)) == 0;
 }
 
 // Characters that look alike across scripts: Latin capitals with their Cyrillic (including Ukrainian / Serbian) and
@@ -119,6 +137,17 @@ inline bool LooksLikeAnother(const std::string& name, const std::set<std::string
         }
     }
     return false;
+}
+
+// A parameter name that imitates the host's token parameter (МСПТокен...) in some script mix. Such a name is never
+// accepted as an ordinary mixed parameter.
+inline bool LooksLikeTokenParam(const std::string& name) {
+    const std::string key = NormalizeIdentifierKey(name);
+    const std::string prefix = NormalizeIdentifierKey("МСПТокен");
+    const std::string cyr = NormalizeIdentifierKey(FoldHomoglyphs(key, true));
+    const std::string lat = NormalizeIdentifierKey(FoldHomoglyphs(key, false));
+    return cyr.compare(0, prefix.size(), NormalizeIdentifierKey(FoldHomoglyphs(prefix, true))) == 0 ||
+           lat.compare(0, prefix.size(), NormalizeIdentifierKey(FoldHomoglyphs(prefix, false))) == 0;
 }
 
 }  // namespace lineage

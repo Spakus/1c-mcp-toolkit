@@ -1,0 +1,4 @@
+// kind: code
+// expect: confirm
+// reason: C_FUNC_OVER_PROTECTED
+Результат = СтрДлина(Константы.ИмяОрганизации.Получить());

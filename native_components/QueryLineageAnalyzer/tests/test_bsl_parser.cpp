@@ -368,3 +368,22 @@ TEST(BslParser, BlockDepthCountsCompoundStatementsOnly) {
     for (int i = 0; i < 33; ++i) over += "КонецЕсли; ";
     CHECK_EQ(CodeOf(over), std::string("C_LIMIT"));
 }
+
+TEST(BslParser, Base64PlatformNamesPassTheMixedScriptRule) {
+    CHECK(ParseBsl("Р = Base64Строка(\"x\");").ok);
+    CHECK(ParseBsl("Р = Base64Значение(\"eA==\");").ok);
+    CHECK(ParseBsl("Р = ПолучитьДвоичныеДанныеИзBase64Строки(\"eA==\");").ok);
+    CHECK(ParseBsl("Р = ПолучитьBase64СтрокуИзДвоичныхДанных(Х);").ok);
+    CHECK(ParseBsl("Р = base64строка(\"x\");").ok);   // case-insensitive, like every platform name
+    const char* const bad[] = {
+        "Р = Base64\x43" "трока(\"x\");",                          // Latin C
+        "Р = Base64Строк\x61(\"x\");",                             // Latin a
+        "Р = Base64Зн\x61" "чение(\"x\");",                        // Latin a
+        "Р = ПолучитьДвоичныеДанныеИзBase64Строк\x61(\"x\");",     // Latin a
+        "Р = Base64СтрокаX(\"x\");", "Р = ПолучитьBase64СтрокуИзДвоичныхДанныхX(Х);"};
+    for (const char* src : bad) {
+        const ParseResult r = ParseBsl(src);
+        CHECK(!r.ok);
+        CHECK_EQ(r.error.code, std::string("C_PARSE"));
+    }
+}

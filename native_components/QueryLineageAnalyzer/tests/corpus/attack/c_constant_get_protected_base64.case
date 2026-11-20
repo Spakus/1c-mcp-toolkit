@@ -1,0 +1,4 @@
+// kind: code
+// expect: confirm
+// reason: C_FUNC_OVER_PROTECTED
+Результат = Base64Строка(Константы.ИмяОрганизации.Получить());

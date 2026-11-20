@@ -1,0 +1,5 @@
+// kind: code
+// expect: confirm
+// reason: C_DYNAMIC_QUERY
+З = Новый Запрос("ВЫБРАТЬ 1" + Символы.ПС + "КАК А");
+Результат = 1;
